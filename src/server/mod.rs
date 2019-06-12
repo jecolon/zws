@@ -1,8 +1,12 @@
 extern crate openssl;
 
 use std::cell::RefCell;
+use std::fs::File;
 use std::io;
+use std::io::prelude::*;
+use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
+use std::str;
 use std::sync::Arc;
 use std::thread;
 
@@ -15,7 +19,7 @@ use solicit::http::transport::TransportStream;
 use solicit::http::{Header, HttpScheme, Response, StreamId};
 
 // new_acceptor creates a new TLS acceptor with the given certificate and key.
-pub fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
+fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
     let mut acceptor =
         SslAcceptor::mozilla_intermediate(SslMethod::tls()).expect("error creating SSL Acceptor");
     acceptor.set_private_key_file(key, SslFiletype::PEM)?;
@@ -105,9 +109,64 @@ impl TransportStream for Wrapper {
 }
 
 fn handle_request(req: ServerRequest) -> Response {
+    let mut filename = String::from("index.html");
+    for (name, value) in req.headers {
+        let name = str::from_utf8(&name).unwrap();
+        let value = str::from_utf8(&value).unwrap();
+        if name == ":path" {
+            filename = format!(".{}", value);
+            if filename.ends_with("/") {
+                filename = format!("{}{}", filename, "index.html");
+            }
+        }
+    }
+    let filename = &filename;
+
+    let file = match File::open(filename) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("error opening file {}: {}", filename, e);
+            if io::ErrorKind::NotFound == e.kind() {
+                return Response {
+                    headers: vec![(b":status".to_vec(), b"404".to_vec())],
+                    body: b"Not Found\n".to_vec(),
+                    stream_id: req.stream_id,
+                };
+            }
+            return Response {
+                headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                body: b"Unable to get file\n".to_vec(),
+                stream_id: req.stream_id,
+            };
+        }
+    };
+
+    let meta = match file.metadata() {
+        Ok(meta) => meta,
+        Err(e) => {
+            eprintln!("error reading file {} metadata: {}", filename, e);
+            return Response {
+                headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                body: b"Unable to get file metadata\n".to_vec(),
+                stream_id: req.stream_id,
+            };
+        }
+    };
+
+    let mut buf_reader = BufReader::new(file);
+    let mut buf = Vec::with_capacity(meta.len() as usize);
+    if let Err(e) = buf_reader.read_to_end(&mut buf) {
+        eprintln!("error reading file {}: {}", filename, e);
+        return Response {
+            headers: vec![(b":status".to_vec(), b"500".to_vec())],
+            body: b"Unable to read file\n".to_vec(),
+            stream_id: req.stream_id,
+        };
+    }
+
     Response {
         headers: vec![(b":status".to_vec(), b"200".to_vec())],
-        body: b"Hello World!".to_vec(),
+        body: buf,
         stream_id: req.stream_id,
     }
 }

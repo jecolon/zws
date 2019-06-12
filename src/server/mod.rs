@@ -12,7 +12,7 @@ use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
 use solicit::http::session::{DefaultSessionState, SessionState, Stream};
 use solicit::http::transport::TransportStream;
-use solicit::http::{Header, HttpError, HttpResult, HttpScheme, Response, StreamId};
+use solicit::http::{Header, HttpScheme, Response, StreamId};
 
 // new_acceptor creates a new TLS acceptor with the given certificate and key.
 pub fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
@@ -36,8 +36,20 @@ pub fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
 
 // handle_incoming takes an incoming TLS connection and sends its stream to be handled.
 pub fn run() {
-    let acceptor = new_acceptor("tls/dev/cert.pem", "tls/dev/key.pem").unwrap();
-    let listener = TcpListener::bind("127.0.0.1:8443").unwrap();
+    let acceptor = match new_acceptor("tls/dev/cert.pem", "tls/dev/key.pem") {
+        Ok(acceptor) => acceptor,
+        Err(e) => {
+            eprintln!("error creating TLS acceptor: {}", e);
+            return;
+        }
+    };
+    let listener = match TcpListener::bind("127.0.0.1:8443") {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!("error binding to TCP socket: {}", e);
+            return;
+        }
+    };
 
     for stream in listener.incoming() {
         match stream {
@@ -122,15 +134,25 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>) {
     let conn = HttpConnection::<Wrapper, Wrapper>::with_stream(stream, HttpScheme::Https);
     let mut conn: ServerConnection<Wrapper, Wrapper> =
         ServerConnection::with_connection(conn, DefaultSessionState::new());
-    conn.init().unwrap();
+    if let Err(e) = conn.init() {
+        eprintln!("error binding to TCP socket: {}", e);
+        return;
+    };
 
     while let Ok(_) = conn.handle_next_frame() {
         let mut responses = Vec::new();
         for stream in conn.state.iter() {
             if stream.is_closed_remote() {
+                let h = match stream.headers.as_ref() {
+                    Some(h) => h,
+                    None => {
+                        eprintln!("error, no HTTP/2 stream headers");
+                        return;
+                    }
+                };
                 let req = ServerRequest {
                     stream_id: stream.stream_id,
-                    headers: stream.headers.as_ref().unwrap(),
+                    headers: h,
                     body: &stream.body,
                 };
                 responses.push(handle_request(req));
@@ -138,115 +160,34 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>) {
         }
 
         for response in responses {
-            conn.start_response(response.headers, response.stream_id, EndStream::No)
-                .unwrap();
-            let stream = conn.state.get_stream_mut(response.stream_id).unwrap();
+            if let Err(e) = conn.start_response(response.headers, response.stream_id, EndStream::No)
+            {
+                eprintln!("error starting response: {}", e);
+                return;
+            }
+            let stream = match conn.state.get_stream_mut(response.stream_id) {
+                Some(stream) => stream,
+                None => {
+                    eprintln!("error getting mutable stream");
+                    return;
+                }
+            };
             stream.set_full_data(response.body);
         }
 
-        while let SendStatus::Sent = conn.send_next_data().unwrap() {}
+        loop {
+            match conn.send_next_data() {
+                Ok(status) => {
+                    if status != SendStatus::Sent {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error sending next data: {}", e);
+                    break;
+                }
+            }
+        }
         let _ = conn.state.get_closed();
-    }
-}
-
-pub struct SimpleServer<TS, H>
-where
-    TS: TransportStream,
-    H: FnMut(ServerRequest) -> Response,
-{
-    conn: ServerConnection<TS, TS>,
-    handler: H,
-}
-
-impl<TS, H> SimpleServer<TS, H>
-where
-    TS: TransportStream,
-    H: FnMut(ServerRequest) -> Response,
-{
-    /// Creates a new `SimpleServer` that will use the given `TransportStream` to communicate to
-    /// the client. Assumes that the stream is fully uninitialized -- no preface sent or read yet.
-    pub fn new(mut stream: TS, handler: H) -> HttpResult<SimpleServer<TS, H>> {
-        // First assert that the preface is received
-        let mut preface = [0; 24];
-        TransportStream::read_exact(&mut stream, &mut preface)?;
-        if &preface != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" {
-            return Err(HttpError::UnableToConnect);
-        }
-
-        let conn = HttpConnection::<TS, TS>::with_stream(stream, HttpScheme::Https);
-        let mut server = SimpleServer {
-            conn: ServerConnection::with_connection(conn, DefaultSessionState::new()),
-            handler: handler,
-        };
-
-        // Initialize the connection -- send own settings and process the peer's
-        server.conn.init()?;
-
-        // Set up done
-        Ok(server)
-    }
-
-    /// Handles the next incoming frame, blocking to receive it if nothing is available on the
-    /// underlying stream.
-    ///
-    /// Handling the frame can trigger the handler callback. Any responses returned by the handler
-    /// are immediately flushed out to the client (blocking the call until it's done).
-    pub fn handle_next(&mut self) -> HttpResult<()> {
-        self.conn.handle_next_frame()?;
-        let responses = self.handle_requests()?;
-        self.prepare_responses(responses)?;
-        self.flush_streams()?;
-        self.reap_streams()?;
-
-        Ok(())
-    }
-
-    /// Invokes the request handler for each fully received request. Collects all the responses
-    /// into the returned `Vec`.
-    fn handle_requests(&mut self) -> HttpResult<Vec<Response>> {
-        let handler = &mut self.handler;
-        Ok(self
-            .conn
-            .state
-            .iter()
-            .filter(|s| s.is_closed_remote())
-            .map(|stream| {
-                let req = ServerRequest {
-                    stream_id: stream.stream_id,
-                    headers: stream.headers.as_ref().unwrap(),
-                    body: &stream.body,
-                };
-                handler(req)
-            })
-            .collect())
-    }
-
-    /// Prepares the streams for each of the given responses. Headers for each response are
-    /// immediately sent and the data staged into the streams' outgoing buffer.
-    fn prepare_responses(&mut self, responses: Vec<Response>) -> HttpResult<()> {
-        for response in responses.into_iter() {
-            self.conn
-                .start_response(response.headers, response.stream_id, EndStream::No)?;
-            let stream = self.conn.state.get_stream_mut(response.stream_id).unwrap();
-            stream.set_full_data(response.body);
-        }
-
-        Ok(())
-    }
-
-    /// Flushes the outgoing buffers of all streams.
-    #[inline]
-    fn flush_streams(&mut self) -> HttpResult<()> {
-        while let SendStatus::Sent = self.conn.send_next_data()? {}
-
-        Ok(())
-    }
-
-    /// Removes closed streams from the connection state.
-    #[inline]
-    fn reap_streams(&mut self) -> HttpResult<()> {
-        // Moves the streams out of the state and then drops them
-        let _ = self.conn.state.get_closed();
-        Ok(())
     }
 }

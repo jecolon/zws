@@ -108,6 +108,28 @@ impl TransportStream for Wrapper {
     }
 }
 
+fn get_ctype(filename: &str) -> &str {
+    let mut ctype = "application/octet-stream";
+
+    if let Some(dot) = filename.rfind('.') {
+        ctype = match &filename[dot..] {
+            ".html" | ".htm" => "text/html; charset=utf-8",
+            ".css" => "text/css",
+            ".js" => "text/javascript",
+            ".png" => "image/png",
+            ".jpg" | ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".svg" => "image/svg+xml",
+            ".webp" => "image/webp",
+            ".txt" => "text/plain; charset=utf-8",
+            ".json" => "application/json",
+            _ => "binary/octet-stream",
+        }
+    }
+
+    &ctype
+}
+
 fn handle_request(req: ServerRequest) -> Response {
     let mut filename = String::from("index.html");
     for (name, value) in req.headers {
@@ -164,8 +186,13 @@ fn handle_request(req: ServerRequest) -> Response {
         };
     }
 
+    let ctype = get_ctype(filename);
+
     Response {
-        headers: vec![(b":status".to_vec(), b"200".to_vec())],
+        headers: vec![
+            (b":status".to_vec(), b"200".to_vec()),
+            (b":content-type".to_vec(), ctype.as_bytes().to_vec()),
+        ],
         body: buf,
         stream_id: req.stream_id,
     }

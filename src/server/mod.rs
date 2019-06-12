@@ -15,7 +15,7 @@ use solicit::http::transport::TransportStream;
 use solicit::http::{Header, HttpError, HttpResult, HttpScheme, Response, StreamId};
 
 // new_acceptor creates a new TLS acceptor with the given certificate and key.
-pub fn new_acceptor(cert: &str, key: &str) -> Result<SslAcceptor, Error> {
+pub fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
     let mut acceptor =
         SslAcceptor::mozilla_intermediate(SslMethod::tls()).expect("error creating SSL Acceptor");
     acceptor.set_private_key_file(key, SslFiletype::PEM)?;
@@ -31,7 +31,7 @@ pub fn new_acceptor(cert: &str, key: &str) -> Result<SslAcceptor, Error> {
     });
     acceptor.set_alpn_protos(b"\x08http/1.1\x02h2")?;
 
-    Ok(acceptor.build())
+    Ok(Arc::new(acceptor.build()))
 }
 
 // handle_incoming takes an incoming TLS connection and sends its stream to be handled.
@@ -42,14 +42,8 @@ pub fn run() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let stream = match acceptor.accept(stream) {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        eprintln!("error in TLS accept: {}", e);
-                        continue;
-                    }
-                };
-                thread::spawn(|| handle_stream(stream));
+                let acceptor = Arc::clone(&acceptor);
+                thread::spawn(|| handle_stream(stream, acceptor));
             }
             Err(e) => {
                 eprintln!("error in TCP accept: {}", e);
@@ -106,7 +100,14 @@ fn handle_request(req: ServerRequest) -> Response {
     }
 }
 
-fn handle_stream(stream: SslStream<TcpStream>) {
+fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>) {
+    let stream = match acceptor.accept(stream) {
+        Ok(stream) => stream,
+        Err(e) => {
+            eprintln!("error in TLS accept: {}", e);
+            return;
+        }
+    };
     let mut stream = Wrapper(Arc::new(RefCell::new(stream)));
 
     let mut preface = [0; 24];

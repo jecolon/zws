@@ -110,7 +110,10 @@ fn handle_stream(stream: SslStream<TcpStream>) {
     let mut stream = Wrapper(Arc::new(RefCell::new(stream)));
 
     let mut preface = [0; 24];
-    TransportStream::read_exact(&mut stream, &mut preface).unwrap();
+    if let Err(e) = TransportStream::read_exact(&mut stream, &mut preface) {
+        eprintln!("error reading from client connection: {}", e);
+        return;
+    }
     if &preface != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" {
         return;
     }

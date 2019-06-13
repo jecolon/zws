@@ -1,11 +1,12 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::str;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread;
 
 use openssl::ssl::{AlpnError, Error, SslAcceptor, SslFiletype, SslMethod, SslStream};
@@ -36,6 +37,82 @@ fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
     Ok(Arc::new(acceptor.build()))
 }
 
+// Memcache is a concurrency safe cache for Responses
+struct MemCache {
+    store: RwLock<HashMap<String, Response>>,
+}
+
+impl MemCache {
+    fn get(&self, filename: &String, req: ServerRequest) -> Response {
+        // Short circut return if found
+        if let Some(resp) = self.store.read().unwrap().get(filename) {
+            let mut resp = resp.clone();
+            resp.stream_id = req.stream_id;
+            return resp;
+        }
+
+        let file = match File::open(filename) {
+            Ok(file) => file,
+            Err(e) => {
+                eprintln!("error opening file {}: {}", filename, e);
+                if io::ErrorKind::NotFound == e.kind() {
+                    return Response {
+                        headers: vec![(b":status".to_vec(), b"404".to_vec())],
+                        body: b"Not Found\n".to_vec(),
+                        stream_id: req.stream_id,
+                    };
+                }
+                return Response {
+                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                    body: b"Unable to get file\n".to_vec(),
+                    stream_id: req.stream_id,
+                };
+            }
+        };
+
+        let meta = match file.metadata() {
+            Ok(meta) => meta,
+            Err(e) => {
+                eprintln!("error reading file {} metadata: {}", filename, e);
+                return Response {
+                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                    body: b"Unable to get file metadata\n".to_vec(),
+                    stream_id: req.stream_id,
+                };
+            }
+        };
+
+        let mut buf_reader = BufReader::new(file);
+        let mut buf = Vec::with_capacity(meta.len() as usize);
+        if let Err(e) = buf_reader.read_to_end(&mut buf) {
+            eprintln!("error reading file {}: {}", filename, e);
+            return Response {
+                headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                body: b"Unable to read file\n".to_vec(),
+                stream_id: req.stream_id,
+            };
+        }
+
+        let ctype = get_ctype(filename);
+
+        let resp = Response {
+            headers: vec![
+                (b":status".to_vec(), b"200".to_vec()),
+                (b"content-type".to_vec(), ctype.as_bytes().to_vec()),
+            ],
+            body: buf,
+            stream_id: req.stream_id,
+        };
+
+        self.store
+            .write()
+            .unwrap()
+            .insert(filename.to_string(), resp.clone());
+
+        resp
+    }
+}
+
 // handle_incoming takes an incoming TLS connection and sends its stream to be handled.
 pub fn run() {
     let acceptor = match new_acceptor("tls/dev/cert.pem", "tls/dev/key.pem") {
@@ -45,6 +122,7 @@ pub fn run() {
             return;
         }
     };
+
     let listener = match TcpListener::bind("127.0.0.1:8443") {
         Ok(listener) => listener,
         Err(e) => {
@@ -53,11 +131,16 @@ pub fn run() {
         }
     };
 
+    let cache = Arc::new(MemCache {
+        store: RwLock::new(HashMap::new()),
+    });
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let acceptor = Arc::clone(&acceptor);
-                thread::spawn(|| handle_stream(stream, acceptor));
+                let cache = Arc::clone(&cache);
+                thread::spawn(|| handle_stream(stream, acceptor, cache));
             }
             Err(e) => {
                 eprintln!("error in TCP accept: {}", e);
@@ -128,7 +211,7 @@ fn get_ctype(filename: &str) -> &str {
     &ctype
 }
 
-fn handle_request(req: ServerRequest) -> Response {
+fn handle_request(req: ServerRequest, cache: Arc<MemCache>) -> Response {
     let mut filename = String::from("index.html");
     for (name, value) in req.headers {
         let name = str::from_utf8(&name).unwrap();
@@ -142,61 +225,10 @@ fn handle_request(req: ServerRequest) -> Response {
     }
     let filename = &filename;
 
-    let file = match File::open(filename) {
-        Ok(file) => file,
-        Err(e) => {
-            eprintln!("error opening file {}: {}", filename, e);
-            if io::ErrorKind::NotFound == e.kind() {
-                return Response {
-                    headers: vec![(b":status".to_vec(), b"404".to_vec())],
-                    body: b"Not Found\n".to_vec(),
-                    stream_id: req.stream_id,
-                };
-            }
-            return Response {
-                headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                body: b"Unable to get file\n".to_vec(),
-                stream_id: req.stream_id,
-            };
-        }
-    };
-
-    let meta = match file.metadata() {
-        Ok(meta) => meta,
-        Err(e) => {
-            eprintln!("error reading file {} metadata: {}", filename, e);
-            return Response {
-                headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                body: b"Unable to get file metadata\n".to_vec(),
-                stream_id: req.stream_id,
-            };
-        }
-    };
-
-    let mut buf_reader = BufReader::new(file);
-    let mut buf = Vec::with_capacity(meta.len() as usize);
-    if let Err(e) = buf_reader.read_to_end(&mut buf) {
-        eprintln!("error reading file {}: {}", filename, e);
-        return Response {
-            headers: vec![(b":status".to_vec(), b"500".to_vec())],
-            body: b"Unable to read file\n".to_vec(),
-            stream_id: req.stream_id,
-        };
-    }
-
-    let ctype = get_ctype(filename);
-
-    Response {
-        headers: vec![
-            (b":status".to_vec(), b"200".to_vec()),
-            (b":content-type".to_vec(), ctype.as_bytes().to_vec()),
-        ],
-        body: buf,
-        stream_id: req.stream_id,
-    }
+    cache.get(filename, req)
 }
 
-fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>) {
+fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<MemCache>) {
     let stream = match acceptor.accept(stream) {
         Ok(stream) => stream,
         Err(e) => {
@@ -239,7 +271,8 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>) {
                     headers: h,
                     body: &stream.body,
                 };
-                responses.push(handle_request(req));
+                let cache = Arc::clone(&cache);
+                responses.push(handle_request(req, cache));
             }
         }
 

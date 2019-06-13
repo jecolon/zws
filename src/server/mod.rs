@@ -44,7 +44,7 @@ struct MemCache {
 
 impl MemCache {
     fn get(&self, filename: &String, req: ServerRequest) -> Response {
-        // Short circut return if found
+        // Short circuit return if found
         if let Some(resp) = self.store.read().unwrap().get(filename) {
             let mut resp = resp.clone();
             resp.stream_id = req.stream_id;

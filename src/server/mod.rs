@@ -189,7 +189,7 @@ impl TransportStream for Wrapper {
     }
 }
 
-fn get_ctype(filename: &str) -> &str {
+pub fn get_ctype(filename: &str) -> &str {
     let mut ctype = "application/octet-stream";
 
     if let Some(dot) = filename.rfind('.') {

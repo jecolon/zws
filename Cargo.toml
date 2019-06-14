@@ -7,3 +7,10 @@ edition = "2018"
 [dependencies]
 openssl = "~0.10"
 solicit = "~0.4"
+
+[dev-dependencies]
+criterion = "0.2"
+
+[[bench]]
+name = "server_bench"
+harness = false

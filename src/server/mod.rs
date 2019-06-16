@@ -43,12 +43,10 @@ struct MemCache {
 }
 
 impl MemCache {
-    fn get(&self, filename: &String, req: ServerRequest) -> Response {
+    fn get(&self, filename: &String) -> Response {
         // Short circuit return if found
         if let Some(resp) = self.store.read().unwrap().get(filename) {
-            let mut resp = resp.clone();
-            resp.stream_id = req.stream_id;
-            return resp;
+            return resp.clone();
         }
 
         let file = match File::open(filename) {
@@ -59,13 +57,13 @@ impl MemCache {
                     return Response {
                         headers: vec![(b":status".to_vec(), b"404".to_vec())],
                         body: b"Not Found\n".to_vec(),
-                        stream_id: req.stream_id,
+                        stream_id: 0,
                     };
                 }
                 return Response {
                     headers: vec![(b":status".to_vec(), b"500".to_vec())],
                     body: b"Unable to get file\n".to_vec(),
-                    stream_id: req.stream_id,
+                    stream_id: 0,
                 };
             }
         };
@@ -77,7 +75,7 @@ impl MemCache {
                 return Response {
                     headers: vec![(b":status".to_vec(), b"500".to_vec())],
                     body: b"Unable to get file metadata\n".to_vec(),
-                    stream_id: req.stream_id,
+                    stream_id: 0,
                 };
             }
         };
@@ -89,7 +87,7 @@ impl MemCache {
             return Response {
                 headers: vec![(b":status".to_vec(), b"500".to_vec())],
                 body: b"Unable to read file\n".to_vec(),
-                stream_id: req.stream_id,
+                stream_id: 0,
             };
         }
 
@@ -101,7 +99,7 @@ impl MemCache {
                 (b"content-type".to_vec(), ctype.as_bytes().to_vec()),
             ],
             body: buf,
-            stream_id: req.stream_id,
+            stream_id: 0,
         };
 
         self.store
@@ -113,21 +111,19 @@ impl MemCache {
     }
 }
 
-// handle_incoming takes an incoming TLS connection and sends its stream to be handled.
-pub fn run() {
+// run does setup and takes an incoming TLS connection and sends its stream to be handled.
+pub fn run() -> Result<(), String> {
     let acceptor = match new_acceptor("tls/dev/cert.pem", "tls/dev/key.pem") {
         Ok(acceptor) => acceptor,
         Err(e) => {
-            eprintln!("error creating TLS acceptor: {}", e);
-            return;
+            return Err(format!("error creating TLS acceptor: {}", e));
         }
     };
 
     let listener = match TcpListener::bind("127.0.0.1:8443") {
         Ok(listener) => listener,
         Err(e) => {
-            eprintln!("error binding to TCP socket: {}", e);
-            return;
+            return Err(format!("error binding to TCP socket: {}", e));
         }
     };
 
@@ -147,13 +143,15 @@ pub fn run() {
             }
         }
     }
+
+    Ok(())
 }
 
 /// The struct represents a fully received request.
-pub struct ServerRequest<'a> {
-    pub stream_id: StreamId,
-    pub headers: &'a [Header],
-    pub body: &'a [u8],
+struct ServerRequest<'a> {
+    stream_id: StreamId,
+    headers: &'a [Header],
+    body: &'a [u8],
 }
 
 struct Wrapper(Arc<RefCell<SslStream<TcpStream>>>);
@@ -225,7 +223,9 @@ fn handle_request(req: ServerRequest, cache: Arc<MemCache>) -> Response {
     }
     let filename = &filename;
 
-    cache.get(filename, req)
+    let mut resp = cache.get(filename);
+    resp.stream_id = req.stream_id;
+    resp
 }
 
 fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<MemCache>) {

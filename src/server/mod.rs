@@ -17,134 +17,57 @@ use solicit::http::session::{DefaultSessionState, SessionState, Stream};
 use solicit::http::transport::TransportStream;
 use solicit::http::{Header, HttpScheme, Response, StreamId};
 
-// new_acceptor creates a new TLS acceptor with the given certificate and key.
-fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
-    let mut acceptor =
-        SslAcceptor::mozilla_intermediate(SslMethod::tls()).expect("error creating SSL Acceptor");
-    acceptor.set_private_key_file(key, SslFiletype::PEM)?;
-    acceptor.set_certificate_chain_file(cert)?;
-    acceptor.check_private_key()?;
-    acceptor.set_alpn_select_callback(|_, protos| {
-        const H2: &[u8] = b"\x02h2";
-        if protos.windows(3).any(|window| window == H2) {
-            Ok(b"h2")
-        } else {
-            Err(AlpnError::NOACK)
-        }
-    });
-    acceptor.set_alpn_protos(b"\x08http/1.1\x02h2")?;
-
-    Ok(Arc::new(acceptor.build()))
+/// Server is a simple HTT/2 server
+pub struct Server {
+    acceptor: Arc<SslAcceptor>,
+    listener: TcpListener,
+    cache: Arc<MemCache>,
 }
 
-// Memcache is a concurrency safe cache for Responses
-struct MemCache {
-    store: RwLock<HashMap<String, Response>>,
-}
+impl Server {
+    /// new returns an initialized instance of Server
+    pub fn new(cert: &str, key: &str, socket: &str) -> Result<Server, Box<std::error::Error>> {
+        Ok(Server {
+            acceptor: Server::new_acceptor(cert, key)?,
+            listener: TcpListener::bind(socket)?,
+            cache: MemCache::new(),
+        })
+    }
 
-impl MemCache {
-    fn get(&self, filename: &String) -> Response {
-        // Short circuit return if found
-        if let Some(resp) = self.store.read().unwrap().get(filename) {
-            return resp.clone();
-        }
+    /// new_acceptor creates a new TLS acceptor with the given certificate and key.
+    fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
+        let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+        acceptor.set_private_key_file(key, SslFiletype::PEM)?;
+        acceptor.set_certificate_chain_file(cert)?;
+        acceptor.check_private_key()?;
+        acceptor.set_alpn_select_callback(|_, protos| {
+            const H2: &[u8] = b"\x02h2";
+            if protos.windows(3).any(|window| window == H2) {
+                Ok(b"h2")
+            } else {
+                Err(AlpnError::NOACK)
+            }
+        });
+        acceptor.set_alpn_protos(b"\x08http/1.1\x02h2")?;
 
-        let file = match File::open(filename) {
-            Ok(file) => file,
-            Err(e) => {
-                eprintln!("error opening file {}: {}", filename, e);
-                if io::ErrorKind::NotFound == e.kind() {
-                    return Response {
-                        headers: vec![(b":status".to_vec(), b"404".to_vec())],
-                        body: b"Not Found\n".to_vec(),
-                        stream_id: 0,
-                    };
+        Ok(Arc::new(acceptor.build()))
+    }
+
+    // run does setup and takes an incoming TLS connection and sends its stream to be handled.
+    pub fn run(&self) {
+        for stream in self.listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let acceptor = Arc::clone(&self.acceptor);
+                    let cache = Arc::clone(&self.cache);
+                    thread::spawn(|| handle_stream(stream, acceptor, cache));
                 }
-                return Response {
-                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                    body: b"Unable to get file\n".to_vec(),
-                    stream_id: 0,
-                };
-            }
-        };
-
-        let meta = match file.metadata() {
-            Ok(meta) => meta,
-            Err(e) => {
-                eprintln!("error reading file {} metadata: {}", filename, e);
-                return Response {
-                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                    body: b"Unable to get file metadata\n".to_vec(),
-                    stream_id: 0,
-                };
-            }
-        };
-
-        let mut buf_reader = BufReader::new(file);
-        let mut buf = Vec::with_capacity(meta.len() as usize);
-        if let Err(e) = buf_reader.read_to_end(&mut buf) {
-            eprintln!("error reading file {}: {}", filename, e);
-            return Response {
-                headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                body: b"Unable to read file\n".to_vec(),
-                stream_id: 0,
-            };
-        }
-
-        let ctype = get_ctype(filename);
-
-        let resp = Response {
-            headers: vec![
-                (b":status".to_vec(), b"200".to_vec()),
-                (b"content-type".to_vec(), ctype.as_bytes().to_vec()),
-            ],
-            body: buf,
-            stream_id: 0,
-        };
-
-        self.store
-            .write()
-            .unwrap()
-            .insert(filename.to_string(), resp.clone());
-
-        resp
-    }
-}
-
-// run does setup and takes an incoming TLS connection and sends its stream to be handled.
-pub fn run() -> Result<(), String> {
-    let acceptor = match new_acceptor("tls/dev/cert.pem", "tls/dev/key.pem") {
-        Ok(acceptor) => acceptor,
-        Err(e) => {
-            return Err(format!("error creating TLS acceptor: {}", e));
-        }
-    };
-
-    let listener = match TcpListener::bind("127.0.0.1:8443") {
-        Ok(listener) => listener,
-        Err(e) => {
-            return Err(format!("error binding to TCP socket: {}", e));
-        }
-    };
-
-    let cache = Arc::new(MemCache {
-        store: RwLock::new(HashMap::new()),
-    });
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let acceptor = Arc::clone(&acceptor);
-                let cache = Arc::clone(&cache);
-                thread::spawn(|| handle_stream(stream, acceptor, cache));
-            }
-            Err(e) => {
-                eprintln!("error in TCP accept: {}", e);
+                Err(e) => {
+                    eprintln!("error in TCP accept: {}", e);
+                }
             }
         }
     }
-
-    Ok(())
 }
 
 /// The struct represents a fully received request.
@@ -306,5 +229,87 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<MemCa
             }
         }
         let _ = conn.state.get_closed();
+    }
+}
+
+// Memcache is a concurrency safe cache for Responses
+struct MemCache {
+    store: RwLock<HashMap<String, Response>>,
+}
+
+impl MemCache {
+    /// new returns a new initialized MemCache instance.
+    pub fn new() -> Arc<MemCache> {
+        Arc::new(MemCache {
+            store: RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// get returns an HTTP/2 response for filename.
+    fn get(&self, filename: &String) -> Response {
+        // Short circuit return if found
+        if let Some(resp) = self.store.read().unwrap().get(filename) {
+            return resp.clone();
+        }
+
+        let file = match File::open(filename) {
+            Ok(file) => file,
+            Err(e) => {
+                eprintln!("error opening file {}: {}", filename, e);
+                if io::ErrorKind::NotFound == e.kind() {
+                    return Response {
+                        headers: vec![(b":status".to_vec(), b"404".to_vec())],
+                        body: b"Not Found\n".to_vec(),
+                        stream_id: 0,
+                    };
+                }
+                return Response {
+                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                    body: b"Unable to get file\n".to_vec(),
+                    stream_id: 0,
+                };
+            }
+        };
+
+        let meta = match file.metadata() {
+            Ok(meta) => meta,
+            Err(e) => {
+                eprintln!("error reading file {} metadata: {}", filename, e);
+                return Response {
+                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                    body: b"Unable to get file metadata\n".to_vec(),
+                    stream_id: 0,
+                };
+            }
+        };
+
+        let mut buf_reader = BufReader::new(file);
+        let mut buf = Vec::with_capacity(meta.len() as usize);
+        if let Err(e) = buf_reader.read_to_end(&mut buf) {
+            eprintln!("error reading file {}: {}", filename, e);
+            return Response {
+                headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                body: b"Unable to read file\n".to_vec(),
+                stream_id: 0,
+            };
+        }
+
+        let ctype = get_ctype(filename);
+
+        let resp = Response {
+            headers: vec![
+                (b":status".to_vec(), b"200".to_vec()),
+                (b"content-type".to_vec(), ctype.as_bytes().to_vec()),
+            ],
+            body: buf,
+            stream_id: 0,
+        };
+
+        self.store
+            .write()
+            .unwrap()
+            .insert(filename.to_string(), resp.clone());
+
+        resp
     }
 }

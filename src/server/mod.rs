@@ -60,7 +60,7 @@ impl Server {
                 Ok(stream) => {
                     let acceptor = Arc::clone(&self.acceptor);
                     let cache = Arc::clone(&self.cache);
-                    thread::spawn(|| handle_stream(stream, acceptor, cache));
+                    thread::spawn(move || handle_stream(stream, acceptor, cache));
                 }
                 Err(e) => {
                     eprintln!("error in TCP accept: {}", e);
@@ -70,16 +70,17 @@ impl Server {
     }
 }
 
-/// The struct represents a fully received request.
+/// ServerRequest represents a fully received request.
 struct ServerRequest<'a> {
     stream_id: StreamId,
     headers: &'a [Header],
     body: &'a [u8],
 }
 
+/// Wrapper is a newtype to implement solicit's TransportStream for an SslStream<TcpStream>.
 struct Wrapper(Arc<RefCell<SslStream<TcpStream>>>);
 
-// io::Write
+// io::Write for Wrapper
 impl io::Write for Wrapper {
     fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
         self.0.borrow_mut().write(buf)
@@ -89,7 +90,7 @@ impl io::Write for Wrapper {
     }
 }
 
-// io::Read
+// io::Read for Wrapper
 impl io::Read for Wrapper {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
         self.0.borrow_mut().read(buf)
@@ -110,6 +111,7 @@ impl TransportStream for Wrapper {
     }
 }
 
+/// get_ctype produces a MIME content type string based on filename extension.
 pub fn get_ctype(filename: &str) -> &str {
     let mut ctype = "application/octet-stream";
 
@@ -132,6 +134,7 @@ pub fn get_ctype(filename: &str) -> &str {
     &ctype
 }
 
+/// handle_request processes an HTTP/2 request. It always returns a Response.
 fn handle_request(req: ServerRequest, cache: Arc<MemCache>) -> Response {
     let mut filename = String::from("index.html");
     for (name, value) in req.headers {
@@ -151,6 +154,7 @@ fn handle_request(req: ServerRequest, cache: Arc<MemCache>) -> Response {
     resp
 }
 
+/// handle_stream processess an HTTP/2 TCP/TLS streaml
 fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<MemCache>) {
     let stream = match acceptor.accept(stream) {
         Ok(stream) => stream,
@@ -232,7 +236,7 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<MemCa
     }
 }
 
-// Memcache is a concurrency safe cache for Responses
+// Memcache is a concurrency safe cache for Responses.
 struct MemCache {
     store: RwLock<HashMap<String, Response>>,
 }
@@ -245,7 +249,7 @@ impl MemCache {
         })
     }
 
-    /// get returns an HTTP/2 response for filename.
+    /// get returns an HTTP/2 response for filename. It always returns a Response.
     fn get(&self, filename: &String) -> Response {
         // Short circuit return if found
         if let Some(resp) = self.store.read().unwrap().get(filename) {

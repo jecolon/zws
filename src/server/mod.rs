@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
+use std::hash::BuildHasherDefault;
 use std::io;
 use std::io::prelude::*;
 use std::io::BufReader;
@@ -10,7 +11,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 
 use openssl::ssl::{AlpnError, Error, SslAcceptor, SslFiletype, SslMethod, SslStream};
-
+use seahash::SeaHasher;
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
 use solicit::http::session::{DefaultSessionState, SessionState, Stream};
@@ -236,16 +237,19 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<MemCa
     }
 }
 
+/// BuildHasher lets us use SeaHasher with HashMap.
+type BuildHasher = BuildHasherDefault<SeaHasher>;
+
 // Memcache is a concurrency safe cache for Responses.
 struct MemCache {
-    store: RwLock<HashMap<String, Response>>,
+    store: RwLock<HashMap<String, Response, BuildHasher>>,
 }
 
 impl MemCache {
     /// new returns a new initialized MemCache instance.
     pub fn new() -> Arc<MemCache> {
         Arc::new(MemCache {
-            store: RwLock::new(HashMap::new()),
+            store: RwLock::new(HashMap::<String, Response, BuildHasher>::default()),
         })
     }
 

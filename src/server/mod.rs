@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::BuildHasherDefault;
@@ -7,7 +6,7 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::str;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
 use openssl::ssl::{AlpnError, Error, SslAcceptor, SslFiletype, SslMethod, SslStream};
@@ -79,22 +78,22 @@ struct ServerRequest<'a> {
 }
 
 /// Wrapper is a newtype to implement solicit's TransportStream for an SslStream<TcpStream>.
-struct Wrapper(Arc<RefCell<SslStream<TcpStream>>>);
+struct Wrapper(Arc<Mutex<SslStream<TcpStream>>>);
 
 // io::Write for Wrapper
 impl io::Write for Wrapper {
     fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-        self.0.borrow_mut().write(buf)
+        self.0.lock().unwrap().write(buf)
     }
     fn flush(&mut self) -> Result<(), io::Error> {
-        self.0.borrow_mut().flush()
+        self.0.lock().unwrap().flush()
     }
 }
 
 // io::Read for Wrapper
 impl io::Read for Wrapper {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        self.0.borrow_mut().read(buf)
+        self.0.lock().unwrap().read(buf)
     }
 }
 
@@ -105,7 +104,7 @@ impl TransportStream for Wrapper {
     }
 
     fn close(&mut self) -> Result<(), io::Error> {
-        match self.0.borrow_mut().shutdown() {
+        match self.0.lock().unwrap().shutdown() {
             Ok(_) => Ok(()),
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
         }
@@ -164,7 +163,7 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<MemCa
             return;
         }
     };
-    let mut stream = Wrapper(Arc::new(RefCell::new(stream)));
+    let mut stream = Wrapper(Arc::new(Mutex::new(stream)));
 
     let mut preface = [0; 24];
     if let Err(e) = TransportStream::read_exact(&mut stream, &mut preface) {

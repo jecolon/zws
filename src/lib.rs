@@ -1,9 +1,9 @@
-pub mod server;
 pub mod cache;
+pub mod server;
 
 #[cfg(test)]
 mod tests {
-    use crate::server;
+    use crate::cache;
 
     struct T<'a> {
         filename: &'a str,
@@ -60,7 +60,7 @@ mod tests {
         ];
 
         for t in tests {
-            assert_eq!(server::get_ctype(t.filename), t.want);
+            assert_eq!(cache::get_ctype(t.filename), t.want);
         }
     }
 }

@@ -7,7 +7,6 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::sync::{Arc, RwLock};
 
-use solicit::http::session::Stream;
 use solicit::http::Response;
 
 /// BuildHasher lets us use SeaHasher with HashMap.
@@ -96,7 +95,7 @@ impl MemCache {
 }
 
 /// get_ctype produces a MIME content type string based on filename extension.
-fn get_ctype(filename: &str) -> &str {
+pub fn get_ctype(filename: &str) -> &str {
     let mut ctype = "application/octet-stream";
 
     if let Some(dot) = filename.rfind('.') {

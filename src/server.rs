@@ -11,13 +11,14 @@ use solicit::http::session::{DefaultSessionState, SessionState, Stream};
 use solicit::http::transport::TransportStream;
 use solicit::http::{Header, HttpScheme, Response, StreamId};
 
-use crate::cache;
+//use crate::cache;
+use mcache::{Cache, Entry};
 
 /// Server is a simple HTT/2 server
 pub struct Server {
     acceptor: Arc<SslAcceptor>,
     listener: TcpListener,
-    cache: Arc<cache::MemCache>,
+    cache: Arc<Cache>,
 }
 
 impl Server {
@@ -26,7 +27,7 @@ impl Server {
         Ok(Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
-            cache: cache::MemCache::new(),
+            cache: Cache::new(),
         })
     }
 
@@ -108,7 +109,7 @@ impl TransportStream for Wrapper {
 }
 
 /// handle_request processes an HTTP/2 request. It always returns a Response.
-fn handle_request(req: ServerRequest, cache: Arc<cache::MemCache>) -> Response {
+fn handle_request(req: ServerRequest, cache: Arc<Cache>) -> Response {
     let mut filename = String::from("index.html");
     for (name, value) in req.headers {
         let name = str::from_utf8(&name).unwrap();
@@ -121,13 +122,30 @@ fn handle_request(req: ServerRequest, cache: Arc<cache::MemCache>) -> Response {
         }
     }
 
-    let mut resp = cache.get(&filename[..]);
-    resp.stream_id = req.stream_id;
-    resp
+    let mut response = handle_cache_entry(cache.get(&filename[..]));
+    response.stream_id = req.stream_id;
+    response
+}
+
+/// handle_cache_entry performs a cache get and unwraps the Response.
+fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
+    if found {
+        // Cache hit
+        let &(_, _, ref rwl) = &*entry;
+        return rwl.read().unwrap().clone().unwrap();
+    }
+
+    // Cache miss
+    let &(ref mtx, ref cnd, ref rwl) = &*entry;
+    let mut guard = mtx.lock().unwrap();
+    while !*guard {
+        guard = cnd.wait(guard).unwrap();
+    }
+    rwl.read().unwrap().clone().unwrap()
 }
 
 /// handle_stream processess an HTTP/2 TCP/TLS streaml
-fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<cache::MemCache>) {
+fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<Cache>) {
     let stream = match acceptor.accept(stream) {
         Ok(stream) => stream,
         Err(e) => {

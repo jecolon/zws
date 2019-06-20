@@ -4,13 +4,9 @@ extern crate criterion;
 use criterion::black_box;
 use criterion::Criterion;
 
-use zws::cache;
-
-fn ctype_bench(c: &mut Criterion) {
-    c.bench_function("ctype html", |b| {
-        b.iter(|| cache::get_ctype(black_box("a.html")))
-    });
+fn dummy_bench(c: &mut Criterion) {
+    c.bench_function("dummy", |b| b.iter(|| 2 + 2));
 }
 
-criterion_group!(benches, ctype_bench);
+criterion_group!(benches, dummy_bench);
 criterion_main!(benches);

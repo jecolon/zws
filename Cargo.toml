@@ -8,6 +8,7 @@ edition = "2018"
 openssl = "~0.10"
 solicit = "~0.4"
 seahash = "~3.0"
+mcache = { path = "../mcache" }
 
 [dev-dependencies]
 criterion = "0.2"

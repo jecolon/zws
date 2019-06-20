@@ -1,5 +1,6 @@
 use std::io;
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -19,15 +20,22 @@ pub struct Server {
     acceptor: Arc<SslAcceptor>,
     listener: TcpListener,
     cache: Arc<Cache>,
+    webroot: &'static str,
 }
 
 impl Server {
     /// new returns an initialized instance of Server
-    pub fn new(cert: &str, key: &str, socket: &str) -> Result<Server, Box<std::error::Error>> {
+    pub fn new(
+        webroot: &'static str,
+        cert: &str,
+        key: &str,
+        socket: &str,
+    ) -> Result<Server, Box<std::error::Error>> {
         Ok(Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
-            cache: Cache::new(),
+            cache: Cache::new(webroot),
+            webroot: webroot,
         })
     }
 
@@ -57,7 +65,8 @@ impl Server {
                 Ok(stream) => {
                     let acceptor = Arc::clone(&self.acceptor);
                     let cache = Arc::clone(&self.cache);
-                    thread::spawn(move || handle_stream(stream, acceptor, cache));
+                    let webroot = self.webroot.clone();
+                    thread::spawn(move || handle_stream(stream, acceptor, webroot, cache));
                 }
                 Err(e) => {
                     eprintln!("error in TCP accept: {}", e);
@@ -67,85 +76,13 @@ impl Server {
     }
 }
 
-/// ServerRequest represents a fully received request.
-struct ServerRequest<'a> {
-    stream_id: StreamId,
-    headers: &'a [Header],
-    body: &'a [u8],
-}
-
-/// Wrapper is a newtype to implement solicit's TransportStream for an SslStream<TcpStream>.
-struct Wrapper(Arc<Mutex<SslStream<TcpStream>>>);
-
-// io::Write for Wrapper
-impl io::Write for Wrapper {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-        self.0.lock().unwrap().write(buf)
-    }
-    fn flush(&mut self) -> Result<(), io::Error> {
-        self.0.lock().unwrap().flush()
-    }
-}
-
-// io::Read for Wrapper
-impl io::Read for Wrapper {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        self.0.lock().unwrap().read(buf)
-    }
-}
-
-// solicit::http::transport::TransportStream
-impl TransportStream for Wrapper {
-    fn try_split(&self) -> Result<Wrapper, io::Error> {
-        Ok(Wrapper(self.0.clone()))
-    }
-
-    fn close(&mut self) -> Result<(), io::Error> {
-        match self.0.lock().unwrap().shutdown() {
-            Ok(_) => Ok(()),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-        }
-    }
-}
-
-/// handle_request processes an HTTP/2 request. It always returns a Response.
-fn handle_request(req: ServerRequest, cache: Arc<Cache>) -> Response {
-    let mut filename = String::from("index.html");
-    for (name, value) in req.headers {
-        let name = str::from_utf8(&name).unwrap();
-        let value = str::from_utf8(&value).unwrap();
-        if name == ":path" {
-            filename = format!(".{}", value);
-            if filename.ends_with("/") {
-                filename = format!("{}{}", filename, "index.html");
-            }
-        }
-    }
-
-    let mut response = handle_cache_entry(cache.get(&filename[..]));
-    response.stream_id = req.stream_id;
-    response
-}
-
-/// handle_cache_entry performs a cache get and unwraps the Response.
-fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
-    if found {
-        // Cache hit
-        let &(_, _, ref rwl) = &*entry;
-        return rwl.read().unwrap().clone().unwrap();
-    }
-
-    // Cache miss
-    let &(ref mtx, ref cnd, ref rwl) = &*entry;
-    let mut guard = mtx.lock().unwrap();
-    while !*guard {
-        guard = cnd.wait(guard).unwrap();
-    }
-    rwl.read().unwrap().clone().unwrap()
-}
-
 /// handle_stream processess an HTTP/2 TCP/TLS streaml
-fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<Cache>) {
+fn handle_stream(
+    stream: TcpStream,
+    acceptor: Arc<SslAcceptor>,
+    webroot: &'static str,
+    cache: Arc<Cache>,
+) {
     let stream = match acceptor.accept(stream) {
         Ok(stream) => stream,
         Err(e) => {
@@ -189,7 +126,7 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<Cache
                     body: &stream.body,
                 };
                 let cache = Arc::clone(&cache);
-                responses.push(handle_request(req, cache));
+                responses.push(handle_request(req, webroot, cache));
             }
         }
 
@@ -224,4 +161,89 @@ fn handle_stream(stream: TcpStream, acceptor: Arc<SslAcceptor>, cache: Arc<Cache
         }
         let _ = conn.state.get_closed();
     }
+}
+
+/// handle_request processes an HTTP/2 request. It always returns a Response.
+fn handle_request(req: ServerRequest, webroot: &'static str, cache: Arc<Cache>) -> Response {
+    let mut filename: PathBuf = [webroot, "index.html"].iter().collect();
+
+    for (name, value) in req.headers {
+        let name = str::from_utf8(&name).unwrap();
+        let mut value = str::from_utf8(&value).unwrap();
+        if name == ":path" {
+            if value == "" || value == "/" {
+                break;
+            }
+            if value.starts_with("/") {
+                value = &value[1..];
+            }
+            filename.pop();
+            filename.push(value);
+            if filename.to_string_lossy().ends_with("/") {
+                filename.push("index.html");
+            }
+        }
+    }
+
+    let mut response = handle_cache_entry(cache.get(&filename.to_string_lossy()));
+    response.stream_id = req.stream_id;
+    response
+}
+
+/// ServerRequest represents a fully received request.
+struct ServerRequest<'a> {
+    stream_id: StreamId,
+    headers: &'a [Header],
+    body: &'a [u8],
+}
+
+/// Wrapper is a newtype to implement solicit's TransportStream for an SslStream<TcpStream>.
+struct Wrapper(Arc<Mutex<SslStream<TcpStream>>>);
+
+// io::Write for Wrapper
+impl io::Write for Wrapper {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        self.0.lock().unwrap().write(buf)
+    }
+    fn flush(&mut self) -> Result<(), io::Error> {
+        self.0.lock().unwrap().flush()
+    }
+}
+
+// io::Read for Wrapper
+impl io::Read for Wrapper {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+        self.0.lock().unwrap().read(buf)
+    }
+}
+
+// solicit::http::transport::TransportStream
+impl TransportStream for Wrapper {
+    fn try_split(&self) -> Result<Wrapper, io::Error> {
+        Ok(Wrapper(self.0.clone()))
+    }
+
+    fn close(&mut self) -> Result<(), io::Error> {
+        match self.0.lock().unwrap().shutdown() {
+            Ok(_) => Ok(()),
+            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+        }
+    }
+}
+
+/// handle_cache_entry performs a cache get and unwraps the Response.
+fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
+    if found {
+        // Cache hit
+        let &(_, _, ref rwl) = &*entry;
+        return rwl.read().unwrap().clone().unwrap();
+    }
+
+    // Cache miss
+    let &(ref mtx, ref cnd, ref rwl) = &*entry;
+    let mut guard = mtx.lock().unwrap();
+    while !*guard {
+        guard = cnd.wait(guard).unwrap();
+    }
+    rwl.read().unwrap().clone().unwrap()
 }

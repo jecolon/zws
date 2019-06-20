@@ -26,71 +26,76 @@ impl MemCache {
     }
 
     /// get returns an HTTP/2 response for filename. It always returns a Response.
-    pub fn get(&self, filename: &String) -> Response {
+    pub fn get(&self, key: &str) -> Response {
         // Short circuit return if found
-        if let Some(resp) = self.store.read().unwrap().get(filename) {
+        if let Some(resp) = self.store.read().unwrap().get(key) {
             return resp.clone();
         }
 
-        let file = match File::open(filename) {
-            Ok(file) => file,
-            Err(e) => {
-                eprintln!("error opening file {}: {}", filename, e);
-                if io::ErrorKind::NotFound == e.kind() {
-                    return Response {
-                        headers: vec![(b":status".to_vec(), b"404".to_vec())],
-                        body: b"Not Found\n".to_vec(),
-                        stream_id: 0,
-                    };
-                }
-                return Response {
-                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                    body: b"Unable to get file\n".to_vec(),
-                    stream_id: 0,
-                };
-            }
-        };
-
-        let meta = match file.metadata() {
-            Ok(meta) => meta,
-            Err(e) => {
-                eprintln!("error reading file {} metadata: {}", filename, e);
-                return Response {
-                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                    body: b"Unable to get file metadata\n".to_vec(),
-                    stream_id: 0,
-                };
-            }
-        };
-
-        let mut buf_reader = BufReader::new(file);
-        let mut buf = Vec::with_capacity(meta.len() as usize);
-        if let Err(e) = buf_reader.read_to_end(&mut buf) {
-            eprintln!("error reading file {}: {}", filename, e);
-            return Response {
-                headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                body: b"Unable to read file\n".to_vec(),
-                stream_id: 0,
-            };
-        }
-
-        let ctype = get_ctype(filename);
-
-        let resp = Response {
-            headers: vec![
-                (b":status".to_vec(), b"200".to_vec()),
-                (b"content-type".to_vec(), ctype.as_bytes().to_vec()),
-            ],
-            body: buf,
-            stream_id: 0,
-        };
+        let resp = file_response(key);
 
         self.store
             .write()
             .unwrap()
-            .insert(filename.to_string(), resp.clone());
+            .insert(key.to_string(), resp.clone());
 
         resp
+    }
+}
+
+/// file_response produces a response for the given filename.
+pub fn file_response(filename: &str) -> Response {
+    let file = match File::open(filename) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("error opening file {}: {}", filename, e);
+            if io::ErrorKind::NotFound == e.kind() {
+                return Response {
+                    headers: vec![(b":status".to_vec(), b"404".to_vec())],
+                    body: b"Not Found\n".to_vec(),
+                    stream_id: 0,
+                };
+            }
+            return Response {
+                headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                body: b"Unable to get file\n".to_vec(),
+                stream_id: 0,
+            };
+        }
+    };
+
+    let meta = match file.metadata() {
+        Ok(meta) => meta,
+        Err(e) => {
+            eprintln!("error reading file {} metadata: {}", filename, e);
+            return Response {
+                headers: vec![(b":status".to_vec(), b"500".to_vec())],
+                body: b"Unable to get file metadata\n".to_vec(),
+                stream_id: 0,
+            };
+        }
+    };
+
+    let mut buf_reader = BufReader::new(file);
+    let mut buf = Vec::with_capacity(meta.len() as usize);
+    if let Err(e) = buf_reader.read_to_end(&mut buf) {
+        eprintln!("error reading file {}: {}", filename, e);
+        return Response {
+            headers: vec![(b":status".to_vec(), b"500".to_vec())],
+            body: b"Unable to read file\n".to_vec(),
+            stream_id: 0,
+        };
+    }
+
+    let ctype = get_ctype(filename);
+
+    Response {
+        headers: vec![
+            (b":status".to_vec(), b"200".to_vec()),
+            (b"content-type".to_vec(), ctype.as_bytes().to_vec()),
+        ],
+        body: buf,
+        stream_id: 0,
     }
 }
 

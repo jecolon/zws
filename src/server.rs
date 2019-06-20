@@ -120,9 +120,8 @@ fn handle_request(req: ServerRequest, cache: Arc<cache::MemCache>) -> Response {
             }
         }
     }
-    let filename = &filename;
 
-    let mut resp = cache.get(filename);
+    let mut resp = cache.get(&filename[..]);
     resp.stream_id = req.stream_id;
     resp
 }

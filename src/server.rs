@@ -1,4 +1,3 @@
-use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -21,22 +20,24 @@ pub struct Server {
     acceptor: Arc<SslAcceptor>,
     listener: TcpListener,
     cache: Arc<Cache>,
-    webroot: &'static str,
+    webroot: PathBuf,
 }
 
 impl Server {
     /// new returns an initialized instance of Server
     pub fn new(
-        webroot: &'static str,
+        webroot: &str,
         cert: &str,
         key: &str,
         socket: &str,
     ) -> Result<Server, Box<std::error::Error>> {
+        let abs_webroot = PathBuf::from(webroot).canonicalize()?;
+
         Ok(Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
-            cache: Cache::new(webroot),
-            webroot: webroot,
+            cache: Cache::new(abs_webroot.clone()),
+            webroot: abs_webroot,
         })
     }
 
@@ -81,7 +82,7 @@ impl Server {
 fn handle_stream(
     stream: TcpStream,
     acceptor: Arc<SslAcceptor>,
-    webroot: &'static str,
+    webroot: PathBuf,
     cache: Arc<Cache>,
 ) {
     let stream = match acceptor.accept(stream) {
@@ -127,7 +128,7 @@ fn handle_stream(
                     body: &stream.body,
                 };
                 let cache = Arc::clone(&cache);
-                responses.push(handle_request(req, webroot, cache));
+                responses.push(handle_request(req, webroot.clone(), cache));
             }
         }
 
@@ -165,33 +166,25 @@ fn handle_stream(
 }
 
 /// handle_request processes an HTTP/2 request. It always returns a Response.
-fn handle_request(req: ServerRequest, webroot: &'static str, cache: Arc<Cache>) -> Response {
-    let mut wr = webroot;
-    if wr.starts_with("./") {
-        wr = &wr[2..];
-    }
-    let mut filename = PathBuf::from(wr);
-    if !filename.is_absolute() {
-        filename = env::current_dir().unwrap();
-        filename.push(wr);
-    }
+fn handle_request(req: ServerRequest, mut filename: PathBuf, cache: Arc<Cache>) -> Response {
     filename.push("index.html");
 
     for (name, value) in req.headers {
         let name = str::from_utf8(&name).unwrap();
         let mut value = str::from_utf8(&value).unwrap();
         if name == ":path" {
+            // Site root
             if value == "" || value == "/" {
                 break;
             }
+            // Strip leading /
             if value.starts_with("/") {
                 value = &value[1..];
             }
+            // Remove index.html
             filename.pop();
+            // Add requested path to absolute webroot path
             filename.push(value);
-            if filename.to_string_lossy().ends_with("/") {
-                filename.push("index.html");
-            }
         }
     }
 

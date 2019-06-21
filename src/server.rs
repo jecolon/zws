@@ -166,7 +166,7 @@ fn handle_stream(
 
 /// handle_request processes an HTTP/2 request. It always returns a Response.
 fn handle_request(req: ServerRequest, webroot: &'static str, cache: Arc<Cache>) -> Response {
-    let mut wr = webroot.clone();
+    let mut wr = webroot;
     if wr.starts_with("./") {
         wr = &wr[2..];
     }

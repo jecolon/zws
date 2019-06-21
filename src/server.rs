@@ -1,3 +1,4 @@
+use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -165,7 +166,16 @@ fn handle_stream(
 
 /// handle_request processes an HTTP/2 request. It always returns a Response.
 fn handle_request(req: ServerRequest, webroot: &'static str, cache: Arc<Cache>) -> Response {
-    let mut filename: PathBuf = [webroot, "index.html"].iter().collect();
+    let mut wr = webroot.clone();
+    if wr.starts_with("./") {
+        wr = &wr[2..];
+    }
+    let mut filename = PathBuf::from(wr);
+    if !filename.is_absolute() {
+        filename = env::current_dir().unwrap();
+        filename.push(wr);
+    }
+    filename.push("index.html");
 
     for (name, value) in req.headers {
         let name = str::from_utf8(&name).unwrap();

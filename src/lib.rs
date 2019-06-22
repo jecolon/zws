@@ -1,3 +1,4 @@
+pub mod mcache;
 pub mod server;
 
 #[cfg(test)]

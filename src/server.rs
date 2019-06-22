@@ -12,15 +12,13 @@ use solicit::http::session::{DefaultSessionState, SessionState, Stream};
 use solicit::http::transport::TransportStream;
 use solicit::http::{Header, HttpScheme, Response, StreamId};
 
-//use crate::cache;
-use mcache::{Cache, Entry};
+use crate::mcache::{Cache, Entry};
 
 /// Server is a simple HTT/2 server
 pub struct Server {
     acceptor: Arc<SslAcceptor>,
     listener: TcpListener,
     cache: Arc<Cache>,
-    webroot: PathBuf,
 }
 
 impl Server {
@@ -30,15 +28,12 @@ impl Server {
         cert: &str,
         key: &str,
         socket: &str,
-    ) -> Result<Server, Box<std::error::Error>> {
-        let abs_webroot = PathBuf::from(webroot).canonicalize()?;
-
-        Ok(Server {
+    ) -> Result<Arc<Server>, Box<std::error::Error>> {
+        Ok(Arc::new(Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
-            cache: Cache::new(abs_webroot.clone()),
-            webroot: abs_webroot,
-        })
+            cache: Cache::new(PathBuf::from(webroot).canonicalize()?),
+        }))
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
@@ -61,14 +56,12 @@ impl Server {
     }
 
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
-    pub fn run(&self) {
+    pub fn run(self: Arc<Self>) {
         for stream in self.listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    let acceptor = Arc::clone(&self.acceptor);
-                    let cache = Arc::clone(&self.cache);
-                    let webroot = self.webroot.clone();
-                    thread::spawn(move || handle_stream(stream, acceptor, webroot, cache));
+                    let srv = Arc::clone(&self);
+                    thread::spawn(move || handle_stream(stream, srv));
                 }
                 Err(e) => {
                     eprintln!("error in TCP accept: {}", e);
@@ -79,12 +72,8 @@ impl Server {
 }
 
 /// handle_stream processess an HTTP/2 TCP/TLS streaml
-fn handle_stream(
-    stream: TcpStream,
-    acceptor: Arc<SslAcceptor>,
-    webroot: PathBuf,
-    cache: Arc<Cache>,
-) {
+fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
+    let acceptor = Arc::clone(&srv.acceptor);
     let stream = match acceptor.accept(stream) {
         Ok(stream) => stream,
         Err(e) => {
@@ -127,8 +116,8 @@ fn handle_stream(
                     headers: h,
                     body: &stream.body,
                 };
-                let cache = Arc::clone(&cache);
-                responses.push(handle_request(req, webroot.clone(), cache));
+                let srv = Arc::clone(&srv);
+                responses.push(handle_request(req, srv));
             }
         }
 
@@ -166,7 +155,8 @@ fn handle_stream(
 }
 
 /// handle_request processes an HTTP/2 request. It always returns a Response.
-fn handle_request(req: ServerRequest, mut filename: PathBuf, cache: Arc<Cache>) -> Response {
+fn handle_request(req: ServerRequest, srv: Arc<Server>) -> Response {
+    let mut filename = srv.cache.webroot.clone();
     filename.push("index.html");
 
     for (name, value) in req.headers {
@@ -188,6 +178,7 @@ fn handle_request(req: ServerRequest, mut filename: PathBuf, cache: Arc<Cache>) 
         }
     }
 
+    let cache = Arc::clone(&srv.cache);
     let mut response = handle_cache_entry(cache.get(&filename.to_string_lossy()));
     response.stream_id = req.stream_id;
     response

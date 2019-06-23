@@ -1,7 +1,7 @@
-use zws::server::Server;
+use zws;
 
-fn main() -> Result<(), Box<std::error::Error>> {
-    Server::new(
+fn main() -> zws::Result<()> {
+    zws::Server::new(
         "webroot",
         "tls/dev/cert.pem",
         "tls/dev/key.pem",

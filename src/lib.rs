@@ -1,5 +1,9 @@
+pub mod error;
 pub mod mcache;
 pub mod server;
+
+pub use error::Result;
+pub use server::Server;
 
 #[cfg(test)]
 mod tests {

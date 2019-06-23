@@ -5,13 +5,14 @@ use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use openssl::ssl::{AlpnError, Error, SslAcceptor, SslFiletype, SslMethod, SslStream};
+use openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod, SslStream};
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
 use solicit::http::session::{DefaultSessionState, SessionState, Stream};
 use solicit::http::transport::TransportStream;
 use solicit::http::{Header, HttpScheme, Response, StreamId};
 
+use crate::error::Result;
 use crate::mcache::{Cache, Entry};
 
 /// Server is a simple HTT/2 server
@@ -23,12 +24,7 @@ pub struct Server {
 
 impl Server {
     /// new returns an initialized instance of Server
-    pub fn new(
-        webroot: &str,
-        cert: &str,
-        key: &str,
-        socket: &str,
-    ) -> Result<Arc<Server>, Box<std::error::Error>> {
+    pub fn new(webroot: &str, cert: &str, key: &str, socket: &str) -> Result<Arc<Server>> {
         Ok(Arc::new(Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
@@ -37,7 +33,7 @@ impl Server {
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
-    fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>, Error> {
+    fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>> {
         let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
         acceptor.set_private_key_file(key, SslFiletype::PEM)?;
         acceptor.set_certificate_chain_file(cert)?;
@@ -196,28 +192,28 @@ struct Wrapper(Arc<Mutex<SslStream<TcpStream>>>);
 
 // io::Write for Wrapper
 impl io::Write for Wrapper {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.lock().unwrap().write(buf)
     }
-    fn flush(&mut self) -> Result<(), io::Error> {
+    fn flush(&mut self) -> io::Result<()> {
         self.0.lock().unwrap().flush()
     }
 }
 
 // io::Read for Wrapper
 impl io::Read for Wrapper {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.0.lock().unwrap().read(buf)
     }
 }
 
 // solicit::http::transport::TransportStream
 impl TransportStream for Wrapper {
-    fn try_split(&self) -> Result<Wrapper, io::Error> {
+    fn try_split(&self) -> io::Result<Wrapper> {
         Ok(Wrapper(self.0.clone()))
     }
 
-    fn close(&mut self) -> Result<(), io::Error> {
+    fn close(&mut self) -> io::Result<()> {
         match self.0.lock().unwrap().shutdown() {
             Ok(_) => Ok(()),
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),

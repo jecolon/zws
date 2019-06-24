@@ -7,6 +7,5 @@ fn main() -> zws::Result<()> {
         "tls/dev/key.pem",
         "127.0.0.1:8443",
     )?
-    .run();
-    Ok(())
+    .run()
 }

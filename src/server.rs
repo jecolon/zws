@@ -38,6 +38,7 @@ impl Server {
         acceptor.set_private_key_file(key, SslFiletype::PEM)?;
         acceptor.set_certificate_chain_file(cert)?;
         acceptor.check_private_key()?;
+        acceptor.set_alpn_protos(b"\x08http/1.1\x02h2")?;
         acceptor.set_alpn_select_callback(|_, protos| {
             const H2: &[u8] = b"\x02h2";
             if protos.windows(3).any(|window| window == H2) {
@@ -46,13 +47,12 @@ impl Server {
                 Err(AlpnError::NOACK)
             }
         });
-        acceptor.set_alpn_protos(b"\x08http/1.1\x02h2")?;
 
         Ok(Arc::new(acceptor.build()))
     }
 
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
-    pub fn run(self: Arc<Self>) {
+    pub fn run(self: Arc<Self>) -> Result<()> {
         for stream in self.listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -64,6 +64,7 @@ impl Server {
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -85,6 +86,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
         return;
     }
     if &preface != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" {
+        eprintln!("error in HTTP2 preface: {:?}", &preface);
         return;
     }
 
@@ -171,13 +173,33 @@ fn handle_request(req: ServerRequest, srv: Arc<Server>) -> Response {
             filename.pop();
             // Add requested path to absolute webroot path
             filename.push(value);
+            // Stop processing headers.
+            break;
         }
     }
 
+    // TODO: implement optional caching.
     let cache = Arc::clone(&srv.cache);
     let mut response = handle_cache_entry(cache.get(&filename.to_string_lossy()));
     response.stream_id = req.stream_id;
     response
+}
+
+/// handle_cache_entry performs a cache get and unwraps the Response.
+fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
+    if found {
+        // Cache hit
+        let &(_, _, ref rwl) = &*entry;
+        return rwl.read().unwrap().clone().unwrap();
+    }
+
+    // Cache miss
+    let &(ref mtx, ref cnd, ref rwl) = &*entry;
+    let mut guard = mtx.lock().unwrap();
+    while !*guard {
+        guard = cnd.wait(guard).unwrap();
+    }
+    rwl.read().unwrap().clone().unwrap()
 }
 
 /// ServerRequest represents a fully received request.
@@ -219,21 +241,4 @@ impl TransportStream for Wrapper {
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
         }
     }
-}
-
-/// handle_cache_entry performs a cache get and unwraps the Response.
-fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
-    if found {
-        // Cache hit
-        let &(_, _, ref rwl) = &*entry;
-        return rwl.read().unwrap().clone().unwrap();
-    }
-
-    // Cache miss
-    let &(ref mtx, ref cnd, ref rwl) = &*entry;
-    let mut guard = mtx.lock().unwrap();
-    while !*guard {
-        guard = cnd.wait(guard).unwrap();
-    }
-    rwl.read().unwrap().clone().unwrap()
 }

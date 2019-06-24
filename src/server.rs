@@ -13,23 +13,38 @@ use solicit::http::transport::TransportStream;
 use solicit::http::{Header, HttpScheme, Response, StreamId};
 
 use crate::error::Result;
-use crate::mcache::{Cache, Entry};
+use crate::mcache::{self, Cache, Entry};
 
 /// Server is a simple HTT/2 server
 pub struct Server {
     acceptor: Arc<SslAcceptor>,
     listener: TcpListener,
-    cache: Arc<Cache>,
+    cache: Option<Arc<Cache>>,
+    webroot: PathBuf,
 }
 
 impl Server {
     /// new returns an initialized instance of Server
-    pub fn new(webroot: &str, cert: &str, key: &str, socket: &str) -> Result<Arc<Server>> {
-        Ok(Arc::new(Server {
+    pub fn new(
+        webroot: &str,
+        cert: &str,
+        key: &str,
+        socket: &str,
+        caching: bool,
+    ) -> Result<Arc<Server>> {
+        let mut srv = Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
-            cache: Cache::new(PathBuf::from(webroot).canonicalize()?),
-        }))
+            cache: None,
+            webroot: PathBuf::from(webroot).canonicalize()?,
+        };
+
+        if caching {
+            println!("Response caching enabled.");
+            srv.cache = Some(Cache::new(srv.webroot.clone()));
+        }
+
+        Ok(Arc::new(srv))
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
@@ -154,7 +169,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
 
 /// handle_request processes an HTTP/2 request. It always returns a Response.
 fn handle_request(req: ServerRequest, srv: Arc<Server>) -> Response {
-    let mut filename = srv.cache.webroot.clone();
+    let mut filename = srv.webroot.clone();
     filename.push("index.html");
 
     for (name, value) in req.headers {
@@ -179,8 +194,17 @@ fn handle_request(req: ServerRequest, srv: Arc<Server>) -> Response {
     }
 
     // TODO: implement optional caching.
-    let cache = Arc::clone(&srv.cache);
-    let mut response = handle_cache_entry(cache.get(&filename.to_string_lossy()));
+    let mut response: Response;
+    let filename = &filename.to_string_lossy();
+
+    if let Some(cache) = &srv.cache {
+        let cache = Arc::clone(&cache);
+        response = handle_cache_entry(cache.get(filename));
+    } else {
+        let (r, _) = mcache::file_response(filename);
+        response = r
+    }
+
     response.stream_id = req.stream_id;
     response
 }

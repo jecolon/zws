@@ -6,6 +6,7 @@ fn main() -> zws::Result<()> {
         "tls/dev/cert.pem",
         "tls/dev/key.pem",
         "127.0.0.1:8443",
+        true,
     )?
     .run()
 }

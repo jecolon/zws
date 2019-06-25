@@ -5,7 +5,7 @@ use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod, SslStream};
+use openssl::ssl::{AlpnError, ShutdownResult, SslAcceptor, SslFiletype, SslMethod, SslStream};
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
 use solicit::http::session::{DefaultSessionState, SessionState, Stream};
@@ -260,9 +260,12 @@ impl TransportStream for Wrapper {
     }
 
     fn close(&mut self) -> io::Result<()> {
-        match self.0.lock().unwrap().shutdown() {
-            Ok(_) => Ok(()),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+        loop {
+            match self.0.lock().unwrap().shutdown() {
+                Ok(ShutdownResult::Received) => return Ok(()),
+                Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
+                _ => continue,
+            }
         }
     }
 }

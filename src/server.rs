@@ -5,7 +5,7 @@ use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use env_logger;
+use env_logger::Env;
 use openssl::ssl::{AlpnError, ShutdownResult, SslAcceptor, SslFiletype, SslMethod, SslStream};
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
@@ -33,7 +33,7 @@ impl Server {
         socket: &str,
         caching: bool,
     ) -> Result<Arc<Server>> {
-        env_logger::init();
+        env_logger::from_env(Env::default().default_filter_or("info")).init();
 
         let mut srv = Server {
             acceptor: Server::new_acceptor(cert, key)?,

@@ -5,6 +5,7 @@ use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use env_logger;
 use openssl::ssl::{AlpnError, ShutdownResult, SslAcceptor, SslFiletype, SslMethod, SslStream};
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
@@ -32,6 +33,8 @@ impl Server {
         socket: &str,
         caching: bool,
     ) -> Result<Arc<Server>> {
+        env_logger::init();
+
         let mut srv = Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
@@ -40,11 +43,31 @@ impl Server {
         };
 
         if caching {
-            println!("Response caching enabled.");
             srv.cache = Some(Cache::new(srv.webroot.clone()));
         }
 
         Ok(Arc::new(srv))
+    }
+
+    // run does setup and takes an incoming TLS connection and sends its stream to be handled.
+    pub fn run(self: Arc<Self>) -> Result<()> {
+        println!("zws HTTP server listening on 127.0.0.1:8443. CTRL+C to stop.");
+        if self.cache.is_some() {
+            info!("Response caching enabled.");
+        }
+
+        for stream in self.listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let srv = Arc::clone(&self);
+                    thread::spawn(move || handle_stream(stream, srv));
+                }
+                Err(e) => {
+                    eprintln!("error in TCP accept: {}", e);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
@@ -64,22 +87,6 @@ impl Server {
         });
 
         Ok(Arc::new(acceptor.build()))
-    }
-
-    // run does setup and takes an incoming TLS connection and sends its stream to be handled.
-    pub fn run(self: Arc<Self>) -> Result<()> {
-        for stream in self.listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let srv = Arc::clone(&self);
-                    thread::spawn(move || handle_stream(stream, srv));
-                }
-                Err(e) => {
-                    eprintln!("error in TCP accept: {}", e);
-                }
-            }
-        }
-        Ok(())
     }
 }
 

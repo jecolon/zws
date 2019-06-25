@@ -9,6 +9,8 @@ openssl = "~0.10"
 solicit = "~0.4"
 seahash = "~3.0"
 notify = "~4.0"
+log = "~0.4"
+env_logger = "~0.6"
 
 [dev-dependencies]
 criterion = "0.2"

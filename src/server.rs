@@ -30,7 +30,7 @@ pub struct ServerBuilder {
 impl ServerBuilder {
     pub fn new() -> ServerBuilder {
         ServerBuilder {
-            flag_nocache: true,
+            flag_nocache: false,
             flag_cert: "tls/dev/cert.pem".to_string(),
             flag_key: "tls/dev/key.pem".to_string(),
             flag_socket: "127.0.0.1:8443".to_string(),
@@ -38,13 +38,38 @@ impl ServerBuilder {
         }
     }
 
-    pub fn build(self) -> Result<Arc<Server>> {
+    pub fn without_cache(&mut self) -> &mut Self {
+        self.flag_nocache = true;
+        self
+    }
+
+    pub fn cert(&mut self, cert: &str) -> &mut Self {
+        self.flag_cert = cert.to_string();
+        self
+    }
+
+    pub fn key(&mut self, key: &str) -> &mut Self {
+        self.flag_key = key.to_string();
+        self
+    }
+
+    pub fn socket(&mut self, socket: &str) -> &mut Self {
+        self.flag_socket = socket.to_string();
+        self
+    }
+
+    pub fn webroot(&mut self, webroot: &str) -> &mut Self {
+        self.flag_webroot = webroot.to_string();
+        self
+    }
+
+    pub fn build(&self) -> Result<Arc<Server>> {
         Server::new(
-            !self.flag_nocache,
-            self.flag_cert,
-            self.flag_key,
-            self.flag_socket,
-            self.flag_webroot,
+            self.flag_nocache,
+            &self.flag_cert,
+            &self.flag_key,
+            &self.flag_socket,
+            &self.flag_webroot,
         )
     }
 }
@@ -60,11 +85,11 @@ pub struct Server {
 impl Server {
     /// new returns an initialized instance of Server
     pub fn new(
-        caching: bool,
-        cert: String,
-        key: String,
-        socket: String,
-        webroot: String,
+        nocache: bool,
+        cert: &String,
+        key: &String,
+        socket: &String,
+        webroot: &String,
     ) -> Result<Arc<Server>> {
         env_logger::from_env(Env::default().default_filter_or("info")).init();
 
@@ -78,7 +103,7 @@ impl Server {
         println!("zws HTTP server listening on {}. CTRL+C to stop.", &socket);
         info!("Serving files in {}", &webroot);
         info!("Using certificate: {}, and key: {}.", &cert, &key);
-        if caching {
+        if !nocache {
             srv.cache = Some(Cache::new(srv.webroot.clone()));
             info!("Response caching enabled.");
         }
@@ -95,7 +120,7 @@ impl Server {
                     thread::spawn(move || handle_stream(stream, srv));
                 }
                 Err(e) => {
-                    error!("error in TCP accept: {}", e);
+                    warn!("error in TCP accept: {}", e);
                 }
             }
         }
@@ -128,7 +153,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
     let stream = match acceptor.accept(stream) {
         Ok(stream) => stream,
         Err(e) => {
-            error!("error in TLS accept: {}", e);
+            warn!("error in TLS accept: {}", e);
             return;
         }
     };
@@ -136,11 +161,11 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
 
     let mut preface = [0; 24];
     if let Err(e) = TransportStream::read_exact(&mut stream, &mut preface) {
-        error!("error reading from client connection: {}", e);
+        warn!("error reading from client connection: {}", e);
         return;
     }
     if &preface != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" {
-        error!("error in HTTP2 preface: {:?}", &preface);
+        warn!("error in HTTP2 preface: {:?}", &preface);
         return;
     }
 
@@ -159,7 +184,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
                 let h = match stream.headers.as_ref() {
                     Some(h) => h,
                     None => {
-                        error!("error, no HTTP/2 stream headers");
+                        warn!("error, no HTTP/2 stream headers");
                         return;
                     }
                 };
@@ -176,13 +201,13 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
         for response in responses {
             if let Err(e) = conn.start_response(response.headers, response.stream_id, EndStream::No)
             {
-                error!("error starting response: {}", e);
+                warn!("error starting response: {}", e);
                 return;
             }
             let stream = match conn.state.get_stream_mut(response.stream_id) {
                 Some(stream) => stream,
                 None => {
-                    error!("error getting mutable stream");
+                    warn!("error getting mutable stream");
                     return;
                 }
             };
@@ -197,7 +222,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
                     }
                 }
                 Err(e) => {
-                    error!("error sending next data: {}", e);
+                    warn!("error sending next data: {}", e);
                     break;
                 }
             }

@@ -42,8 +42,12 @@ impl Server {
             webroot: PathBuf::from(webroot).canonicalize()?,
         };
 
+        println!("zws HTTP server listening on {}. CTRL+C to stop.", socket);
+        info!("Serving files in {}", webroot);
+        info!("Using certificate: {}, and key: {}.", cert, key);
         if caching {
             srv.cache = Some(Cache::new(srv.webroot.clone()));
+            info!("Response caching enabled.");
         }
 
         Ok(Arc::new(srv))
@@ -51,11 +55,6 @@ impl Server {
 
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
     pub fn run(self: Arc<Self>) -> Result<()> {
-        println!("zws HTTP server listening on 127.0.0.1:8443. CTRL+C to stop.");
-        if self.cache.is_some() {
-            info!("Response caching enabled.");
-        }
-
         for stream in self.listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -63,7 +62,7 @@ impl Server {
                     thread::spawn(move || handle_stream(stream, srv));
                 }
                 Err(e) => {
-                    eprintln!("error in TCP accept: {}", e);
+                    error!("error in TCP accept: {}", e);
                 }
             }
         }
@@ -96,7 +95,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
     let stream = match acceptor.accept(stream) {
         Ok(stream) => stream,
         Err(e) => {
-            eprintln!("error in TLS accept: {}", e);
+            error!("error in TLS accept: {}", e);
             return;
         }
     };
@@ -104,11 +103,11 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
 
     let mut preface = [0; 24];
     if let Err(e) = TransportStream::read_exact(&mut stream, &mut preface) {
-        eprintln!("error reading from client connection: {}", e);
+        error!("error reading from client connection: {}", e);
         return;
     }
     if &preface != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" {
-        eprintln!("error in HTTP2 preface: {:?}", &preface);
+        error!("error in HTTP2 preface: {:?}", &preface);
         return;
     }
 
@@ -116,7 +115,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
     let mut conn: ServerConnection<Wrapper, Wrapper> =
         ServerConnection::with_connection(conn, DefaultSessionState::new());
     if let Err(e) = conn.init() {
-        eprintln!("error binding to TCP socket: {}", e);
+        error!("error binding to TCP socket: {}", e);
         return;
     };
 
@@ -127,7 +126,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
                 let h = match stream.headers.as_ref() {
                     Some(h) => h,
                     None => {
-                        eprintln!("error, no HTTP/2 stream headers");
+                        error!("error, no HTTP/2 stream headers");
                         return;
                     }
                 };
@@ -144,13 +143,13 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
         for response in responses {
             if let Err(e) = conn.start_response(response.headers, response.stream_id, EndStream::No)
             {
-                eprintln!("error starting response: {}", e);
+                error!("error starting response: {}", e);
                 return;
             }
             let stream = match conn.state.get_stream_mut(response.stream_id) {
                 Some(stream) => stream,
                 None => {
-                    eprintln!("error getting mutable stream");
+                    error!("error getting mutable stream");
                     return;
                 }
             };
@@ -165,7 +164,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
                     }
                 }
                 Err(e) => {
-                    eprintln!("error sending next data: {}", e);
+                    error!("error sending next data: {}", e);
                     break;
                 }
             }

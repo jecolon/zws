@@ -7,6 +7,7 @@ use std::thread;
 
 use env_logger::Env;
 use openssl::ssl::{AlpnError, ShutdownResult, SslAcceptor, SslFiletype, SslMethod, SslStream};
+use serde::Deserialize;
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
 use solicit::http::session::{DefaultSessionState, SessionState, Stream};
@@ -15,6 +16,38 @@ use solicit::http::{Header, HttpScheme, Response, StreamId};
 
 use crate::error::Result;
 use crate::mcache::{self, Cache, Entry};
+
+/// ServerBuilder builds a Server providing sensible defaults.
+#[derive(Deserialize)]
+pub struct ServerBuilder {
+    pub flag_nocache: bool,
+    pub flag_cert: String,
+    pub flag_key: String,
+    pub flag_socket: String,
+    pub flag_webroot: String,
+}
+
+impl ServerBuilder {
+    pub fn new() -> ServerBuilder {
+        ServerBuilder {
+            flag_nocache: true,
+            flag_cert: "tls/dev/cert.pem".to_string(),
+            flag_key: "tls/dev/key.pem".to_string(),
+            flag_socket: "127.0.0.1:8443".to_string(),
+            flag_webroot: "webroot".to_string(),
+        }
+    }
+
+    pub fn build(self) -> Result<Arc<Server>> {
+        Server::new(
+            !self.flag_nocache,
+            self.flag_cert,
+            self.flag_key,
+            self.flag_socket,
+            self.flag_webroot,
+        )
+    }
+}
 
 /// Server is a simple HTT/2 server
 pub struct Server {
@@ -27,24 +60,24 @@ pub struct Server {
 impl Server {
     /// new returns an initialized instance of Server
     pub fn new(
-        webroot: &str,
-        cert: &str,
-        key: &str,
-        socket: &str,
         caching: bool,
+        cert: String,
+        key: String,
+        socket: String,
+        webroot: String,
     ) -> Result<Arc<Server>> {
         env_logger::from_env(Env::default().default_filter_or("info")).init();
 
         let mut srv = Server {
-            acceptor: Server::new_acceptor(cert, key)?,
-            listener: TcpListener::bind(socket)?,
+            acceptor: Server::new_acceptor(&cert, &key)?,
+            listener: TcpListener::bind(&socket)?,
             cache: None,
-            webroot: PathBuf::from(webroot).canonicalize()?,
+            webroot: PathBuf::from(&webroot).canonicalize()?,
         };
 
-        println!("zws HTTP server listening on {}. CTRL+C to stop.", socket);
-        info!("Serving files in {}", webroot);
-        info!("Using certificate: {}, and key: {}.", cert, key);
+        println!("zws HTTP server listening on {}. CTRL+C to stop.", &socket);
+        info!("Serving files in {}", &webroot);
+        info!("Using certificate: {}, and key: {}.", &cert, &key);
         if caching {
             srv.cache = Some(Cache::new(srv.webroot.clone()));
             info!("Response caching enabled.");
@@ -70,7 +103,7 @@ impl Server {
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
-    fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>> {
+    fn new_acceptor(cert: &String, key: &String) -> Result<Arc<SslAcceptor>> {
         let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
         acceptor.set_private_key_file(key, SslFiletype::PEM)?;
         acceptor.set_certificate_chain_file(cert)?;

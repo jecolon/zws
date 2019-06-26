@@ -29,16 +29,9 @@ Options:
 ";
 
     let argv = env::args();
-    let args = Docopt::new(USAGE)
-        .and_then(|d| d.argv(argv.into_iter()).parse())
+    let builder: zws::ServerBuilder = Docopt::new(USAGE)
+        .and_then(|d| d.argv(argv.into_iter()).deserialize())
         .unwrap_or_else(|e| e.exit());
 
-    zws::Server::new(
-        args.get_str("--webroot"),
-        args.get_str("--cert"),
-        args.get_str("--key"),
-        args.get_str("--socket"),
-        !args.get_bool("--nocache"),
-    )?
-    .run()
+    builder.build()?.run()
 }

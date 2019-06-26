@@ -7,6 +7,7 @@ pub mod server;
 
 pub use error::Result;
 pub use server::Server;
+pub use server::ServerBuilder;
 
 #[cfg(test)]
 mod tests {

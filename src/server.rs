@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -8,6 +9,7 @@ use std::thread;
 
 use env_logger::Env;
 use openssl::ssl::{AlpnError, ShutdownResult, SslAcceptor, SslFiletype, SslMethod, SslStream};
+use seahash::SeaHasher;
 use serde::Deserialize;
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
@@ -75,6 +77,9 @@ impl ServerBuilder {
     }
 }
 
+/// BuildHasher lets us use SeaHasher with HashMap.
+type BuildHasher = BuildHasherDefault<SeaHasher>;
+
 // Handler is a function that produces a Response for a given ServerRequest.
 type Handler = fn(ServerRequest, Arc<Server>) -> Response;
 
@@ -84,7 +89,7 @@ pub struct Server {
     listener: TcpListener,
     cache: Option<Arc<Cache>>,
     webroot: PathBuf,
-    router: HashMap<Action, Handler>,
+    router: HashMap<Action, Handler, BuildHasher>,
 }
 
 impl Server {
@@ -103,7 +108,7 @@ impl Server {
             listener: TcpListener::bind(&socket)?,
             cache: None,
             webroot: PathBuf::from(&webroot).canonicalize()?,
-            router: HashMap::new(),
+            router: HashMap::<Action, Handler, BuildHasher>::default(),
         };
 
         println!("zws HTTP server listening on {}. CTRL+C to stop.", &socket);

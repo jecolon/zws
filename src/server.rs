@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -74,12 +75,16 @@ impl ServerBuilder {
     }
 }
 
+// Handler is a function that produces a Response for a given ServerRequest.
+type Handler = fn(ServerRequest, Arc<Server>) -> Response;
+
 /// Server is a simple HTT/2 server
 pub struct Server {
     acceptor: Arc<SslAcceptor>,
     listener: TcpListener,
     cache: Option<Arc<Cache>>,
     webroot: PathBuf,
+    router: HashMap<Action, Handler>,
 }
 
 impl Server {
@@ -98,6 +103,7 @@ impl Server {
             listener: TcpListener::bind(&socket)?,
             cache: None,
             webroot: PathBuf::from(&webroot).canonicalize()?,
+            router: HashMap::new(),
         };
 
         println!("zws HTTP server listening on {}. CTRL+C to stop.", &socket);
@@ -125,6 +131,14 @@ impl Server {
             }
         }
         Ok(())
+    }
+
+    /// handler returns a handler for a given Action, or file_handler if none found.
+    fn handler(&self, action: &Action) -> Handler {
+        if let Some(h) = self.router.get(&action) {
+            return *h;
+        }
+        return file_handler;
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
@@ -190,7 +204,7 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
                 };
                 debug!("received request: {:?}", req.action);
                 let srv = Arc::clone(&srv);
-                responses.push(handle_request(req, srv));
+                responses.push(srv.handler(&req.action)(req, srv));
             }
         }
 
@@ -227,8 +241,8 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
     }
 }
 
-/// handle_request processes an HTTP/2 request. It always returns a Response.
-fn handle_request(req: ServerRequest, srv: Arc<Server>) -> Response {
+/// file_handler processes a request for a file. It always returns a Response.
+fn file_handler(req: ServerRequest, srv: Arc<Server>) -> Response {
     let mut filename = srv.webroot.clone();
     filename.push("index.html");
 
@@ -293,7 +307,7 @@ fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
 }
 
 /// Action is an HTTP method and path combination.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Hash)]
 enum Action {
     GET(String),
 }

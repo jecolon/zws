@@ -10,11 +10,11 @@ use openssl::ssl::{AlpnError, ShutdownResult, SslAcceptor, SslFiletype, SslMetho
 use serde::Deserialize;
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
-use solicit::http::session::{DefaultSessionState, SessionState, Stream};
+use solicit::http::session::{DefaultSessionState, DefaultStream, SessionState, Stream};
 use solicit::http::transport::TransportStream;
 use solicit::http::{Header, HttpScheme, Response, StreamId};
 
-use crate::error::Result;
+use crate::error::{Result, ServerError};
 use crate::mcache::{self, Cache, Entry};
 
 /// ServerBuilder builds a Server providing sensible defaults.
@@ -181,18 +181,14 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
         let mut responses = Vec::new();
         for stream in conn.state.iter() {
             if stream.is_closed_remote() {
-                let h = match stream.headers.as_ref() {
-                    Some(h) => h,
-                    None => {
-                        warn!("error, no HTTP/2 stream headers");
+                let req = match ServerRequest::new(&stream) {
+                    Ok(req) => req,
+                    Err(e) => {
+                        warn!("error processing request: {}", e);
                         return;
                     }
                 };
-                let req = ServerRequest {
-                    stream_id: stream.stream_id,
-                    headers: h,
-                    body: &stream.body,
-                };
+                debug!("received request: {:?}", req.action);
                 let srv = Arc::clone(&srv);
                 responses.push(handle_request(req, srv));
             }
@@ -237,13 +233,21 @@ fn handle_request(req: ServerRequest, srv: Arc<Server>) -> Response {
     filename.push("index.html");
 
     for (name, value) in req.headers {
-        let name = str::from_utf8(&name).unwrap();
-        let mut value = str::from_utf8(&value).unwrap();
-        if name == ":path" {
+        //let name = str::from_utf8(&name).unwrap();
+        if name == b":path" {
             // Site root
-            if value == "" || value == "/" {
+            if value == b"" || value == b"/" {
                 break;
             }
+
+            let mut value = match str::from_utf8(value) {
+                Ok(value) => value,
+                Err(e) => {
+                    warn!("error decoding :path header as UTF-8: {}", e);
+                    break;
+                }
+            };
+
             // Strip leading /
             if value.starts_with("/") {
                 value = &value[1..];
@@ -257,17 +261,15 @@ fn handle_request(req: ServerRequest, srv: Arc<Server>) -> Response {
         }
     }
 
-    // TODO: implement optional caching.
-    let mut response: Response;
     let filename = &filename.to_string_lossy();
 
-    if let Some(cache) = &srv.cache {
-        let cache = Arc::clone(&cache);
-        response = handle_cache_entry(cache.get(filename));
-    } else {
-        let (r, _) = mcache::file_response(filename);
-        response = r
-    }
+    let mut response = match &srv.cache {
+        Some(cache) => {
+            let cache = Arc::clone(&cache);
+            handle_cache_entry(cache.get(filename))
+        }
+        None => mcache::file_response(filename).0,
+    };
 
     response.stream_id = req.stream_id;
     response
@@ -290,11 +292,77 @@ fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
     rwl.read().unwrap().clone().unwrap()
 }
 
+/// Action is an HTTP method and path combination.
+#[derive(Debug)]
+enum Action {
+    GET(String),
+}
+
 /// ServerRequest represents a fully received request.
 struct ServerRequest<'a> {
+    action: Action,
     stream_id: StreamId,
     headers: &'a [Header],
     body: &'a [u8],
+}
+
+impl<'a> ServerRequest<'a> {
+    fn new(stream: &DefaultStream) -> Result<ServerRequest> {
+        let headers = match stream.headers.as_ref() {
+            Some(h) => h,
+            None => {
+                warn!("error, no HTTP/2 stream headers");
+                return Err(ServerError::BadRequest);
+            }
+        };
+
+        let mut req = ServerRequest {
+            action: Action::GET(String::new()),
+            stream_id: stream.stream_id,
+            headers: headers,
+            body: &stream.body,
+        };
+
+        req.action = match req.header(":method") {
+            Some(method) => match method {
+                "GET" => {
+                    let path = match req.header(":path") {
+                        Some(path) => path,
+                        None => {
+                            warn!("error, request without :path header");
+                            return Err(ServerError::BadRequest);
+                        }
+                    };
+                    Action::GET(String::from(path))
+                }
+                _ => {
+                    warn!("error, unsupported request method");
+                    return Err(ServerError::BadRequest);
+                }
+            },
+            None => {
+                warn!("error, request without :method header");
+                return Err(ServerError::BadRequest);
+            }
+        };
+
+        Ok(req)
+    }
+
+    fn header(&self, name: &str) -> Option<&str> {
+        for (key, value) in self.headers {
+            if key == &name.as_bytes() {
+                return match str::from_utf8(value) {
+                    Ok(sv) => Some(sv),
+                    Err(e) => {
+                        warn!("error decoding header {} as UTF-8: {}", name, e);
+                        None
+                    }
+                };
+            }
+        }
+        None
+    }
 }
 
 /// Wrapper is a newtype to implement solicit's TransportStream for an SslStream<TcpStream>.

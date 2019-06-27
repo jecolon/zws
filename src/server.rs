@@ -114,6 +114,8 @@ impl Server {
             info!("Response caching enabled.");
         }
 
+        srv.add_handler(Action::GET("/hello".to_string()), hello_handler);
+
         Ok(Arc::new(srv))
     }
 
@@ -139,6 +141,11 @@ impl Server {
             return *h;
         }
         return file_handler;
+    }
+
+    /// add_handler registers a handler for a given Action.
+    fn add_handler(&mut self, action: Action, handler: Handler) {
+        self.router.insert(action, handler);
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
@@ -238,6 +245,15 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
             }
         }
         let _ = conn.state.get_closed();
+    }
+}
+
+/// hello_handler processes a request for a greeting.
+fn hello_handler(req: ServerRequest, _srv: Arc<Server>) -> Response {
+    Response {
+        stream_id: req.stream_id,
+        headers: vec![(b":status".to_vec(), b"200".to_vec())],
+        body: b"Hello world!".to_vec(),
     }
 }
 

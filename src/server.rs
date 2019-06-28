@@ -90,11 +90,7 @@ impl ServerBuilder {
             }
         };
 
-        for (action, handler) in self.handlers.iter() {
-            let action = (*action).clone();
-            let handler = (*handler).clone();
-            srv.add_handler(action, handler);
-        }
+        srv.router.clone_from(&self.handlers);
 
         Ok(Arc::new(srv))
     }

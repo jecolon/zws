@@ -2,11 +2,16 @@
 extern crate log;
 
 pub mod error;
+pub mod handlers;
 pub mod mcache;
+pub mod request;
 pub mod server;
+pub mod tls;
 
 pub use error::Result;
-pub use server::{Action, Handler, Server, ServerBuilder, ServerRequest};
+pub use handlers::Handler;
+pub use request::{Action, ServerRequest};
+pub use server::{Server, ServerBuilder};
 
 #[cfg(test)]
 mod tests {

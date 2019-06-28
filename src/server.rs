@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::str;
@@ -8,17 +7,20 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use env_logger::Env;
-use openssl::ssl::{AlpnError, ShutdownResult, SslAcceptor, SslFiletype, SslMethod, SslStream};
+use openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 use seahash::SeaHasher;
 use serde::Deserialize;
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
-use solicit::http::session::{DefaultSessionState, DefaultStream, SessionState, Stream};
+use solicit::http::session::{DefaultSessionState, SessionState, Stream};
 use solicit::http::transport::TransportStream;
-use solicit::http::{Header, HttpScheme, Response, StreamId};
+use solicit::http::HttpScheme;
 
-use crate::error::{Result, ServerError};
-use crate::mcache::{self, Cache, Entry};
+use crate::error::Result;
+use crate::handlers::{file_handler, Handler};
+use crate::mcache::Cache;
+use crate::request::{Action, ServerRequest};
+use crate::tls::Wrapper;
 
 /// ServerBuilder builds a Server providing sensible defaults.
 #[derive(Deserialize)]
@@ -99,15 +101,12 @@ impl ServerBuilder {
 /// BuildHasher lets us use SeaHasher with HashMap.
 type BuildHasher = BuildHasherDefault<SeaHasher>;
 
-// Handler is a function that produces a Response for a given ServerRequest.
-pub type Handler = fn(ServerRequest, Arc<Server>) -> Response;
-
 /// Server is a simple HTT/2 server
 pub struct Server {
     acceptor: Arc<SslAcceptor>,
     listener: TcpListener,
-    cache: Option<Arc<Cache>>,
-    webroot: PathBuf,
+    pub cache: Option<Arc<Cache>>,
+    pub webroot: PathBuf,
     router: HashMap<Action, Handler, BuildHasher>,
 }
 
@@ -157,17 +156,17 @@ impl Server {
         Ok(())
     }
 
+    /// add_handler registers a handler for a given Action.
+    pub fn add_handler(&mut self, action: Action, handler: Handler) {
+        self.router.insert(action, handler);
+    }
+
     /// handler returns a handler for a given Action, or file_handler if none found.
     fn handler(&self, action: &Action) -> Handler {
         if let Some(h) = self.router.get(&action) {
             return *h;
         }
         return file_handler;
-    }
-
-    /// add_handler registers a handler for a given Action.
-    fn add_handler(&mut self, action: Action, handler: Handler) {
-        self.router.insert(action, handler);
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
@@ -267,180 +266,5 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
             }
         }
         let _ = conn.state.get_closed();
-    }
-}
-
-/// file_handler processes a request for a file. It always returns a Response.
-fn file_handler(req: ServerRequest, srv: Arc<Server>) -> Response {
-    let mut filename = srv.webroot.clone();
-    filename.push("index.html");
-
-    for (name, value) in req.headers {
-        //let name = str::from_utf8(&name).unwrap();
-        if name == b":path" {
-            // Site root
-            if value == b"" || value == b"/" {
-                break;
-            }
-
-            let mut value = match str::from_utf8(value) {
-                Ok(value) => value,
-                Err(e) => {
-                    warn!("error decoding :path header as UTF-8: {}", e);
-                    break;
-                }
-            };
-
-            // Strip leading /
-            if value.starts_with("/") {
-                value = &value[1..];
-            }
-            // Remove index.html
-            filename.pop();
-            // Add requested path to absolute webroot path
-            filename.push(value);
-            // Stop processing headers.
-            break;
-        }
-    }
-
-    let filename = &filename.to_string_lossy();
-
-    let mut response = match &srv.cache {
-        Some(cache) => {
-            let cache = Arc::clone(&cache);
-            handle_cache_entry(cache.get(filename))
-        }
-        None => mcache::file_response(filename).0,
-    };
-
-    response.stream_id = req.stream_id;
-    response
-}
-
-/// handle_cache_entry performs a cache get and unwraps the Response.
-fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
-    if found {
-        // Cache hit
-        let &(_, _, ref rwl) = &*entry;
-        return rwl.read().unwrap().clone().unwrap();
-    }
-
-    // Cache miss
-    let &(ref mtx, ref cnd, ref rwl) = &*entry;
-    let mut guard = mtx.lock().unwrap();
-    while !*guard {
-        guard = cnd.wait(guard).unwrap();
-    }
-    rwl.read().unwrap().clone().unwrap()
-}
-
-/// Action is an HTTP method and path combination.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
-pub enum Action {
-    GET(String),
-}
-
-/// ServerRequest represents a fully received request.
-pub struct ServerRequest<'a> {
-    pub action: Action,
-    pub stream_id: StreamId,
-    pub headers: &'a [Header],
-    pub body: &'a [u8],
-}
-
-impl<'a> ServerRequest<'a> {
-    fn new(stream: &DefaultStream) -> Result<ServerRequest> {
-        let headers = match stream.headers.as_ref() {
-            Some(h) => h,
-            None => {
-                warn!("error, no HTTP/2 stream headers");
-                return Err(ServerError::BadRequest);
-            }
-        };
-
-        let mut req = ServerRequest {
-            action: Action::GET(String::new()),
-            stream_id: stream.stream_id,
-            headers: headers,
-            body: &stream.body,
-        };
-
-        req.action = match req.header(":method") {
-            Some(method) => match method {
-                "GET" => {
-                    let path = match req.header(":path") {
-                        Some(path) => path,
-                        None => {
-                            warn!("error, request without :path header");
-                            return Err(ServerError::BadRequest);
-                        }
-                    };
-                    Action::GET(String::from(path))
-                }
-                _ => {
-                    warn!("error, unsupported request method");
-                    return Err(ServerError::BadRequest);
-                }
-            },
-            None => {
-                warn!("error, request without :method header");
-                return Err(ServerError::BadRequest);
-            }
-        };
-
-        Ok(req)
-    }
-
-    fn header(&self, name: &str) -> Option<&str> {
-        for (key, value) in self.headers {
-            if key == &name.as_bytes() {
-                return match str::from_utf8(value) {
-                    Ok(sv) => Some(sv),
-                    Err(e) => {
-                        warn!("error decoding header {} as UTF-8: {}", name, e);
-                        None
-                    }
-                };
-            }
-        }
-        None
-    }
-}
-
-/// Wrapper is a newtype to implement solicit's TransportStream for an SslStream<TcpStream>.
-struct Wrapper(Arc<Mutex<SslStream<TcpStream>>>);
-
-// io::Write for Wrapper
-impl io::Write for Wrapper {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().write(buf)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.lock().unwrap().flush()
-    }
-}
-
-// io::Read for Wrapper
-impl io::Read for Wrapper {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().read(buf)
-    }
-}
-
-// solicit::http::transport::TransportStream
-impl TransportStream for Wrapper {
-    fn try_split(&self) -> io::Result<Wrapper> {
-        Ok(Wrapper(self.0.clone()))
-    }
-
-    fn close(&mut self) -> io::Result<()> {
-        loop {
-            match self.0.lock().unwrap().shutdown() {
-                Ok(ShutdownResult::Received) => return Ok(()),
-                Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
-                _ => continue,
-            }
-        }
     }
 }

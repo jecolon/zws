@@ -28,6 +28,8 @@ pub struct ServerBuilder {
     pub flag_key: String,
     pub flag_socket: String,
     pub flag_webroot: String,
+    #[serde(skip)]
+    handlers: HashMap<Action, Handler, BuildHasher>,
 }
 
 impl ServerBuilder {
@@ -38,6 +40,7 @@ impl ServerBuilder {
             flag_key: "tls/dev/key.pem".to_string(),
             flag_socket: "127.0.0.1:8443".to_string(),
             flag_webroot: "webroot".to_string(),
+            handlers: HashMap::<Action, Handler, BuildHasher>::default(),
         }
     }
 
@@ -66,14 +69,34 @@ impl ServerBuilder {
         self
     }
 
+    pub fn handler(&mut self, action: Action, handler: Handler) -> &mut Self {
+        self.handlers.insert(action, handler);
+        self
+    }
+
     pub fn build(&self) -> Result<Arc<Server>> {
-        Server::new(
+        let srv = Server::new(
             self.flag_nocache,
             &self.flag_cert,
             &self.flag_key,
             &self.flag_socket,
             &self.flag_webroot,
-        )
+        )?;
+
+        let mut srv = match Arc::try_unwrap(srv) {
+            Ok(srv) => srv,
+            Err(_) => {
+                panic!("unable to build Server");
+            }
+        };
+
+        for (action, handler) in self.handlers.iter() {
+            let action = (*action).clone();
+            let handler = (*handler).clone();
+            srv.add_handler(action, handler);
+        }
+
+        Ok(Arc::new(srv))
     }
 }
 
@@ -81,7 +104,7 @@ impl ServerBuilder {
 type BuildHasher = BuildHasherDefault<SeaHasher>;
 
 // Handler is a function that produces a Response for a given ServerRequest.
-type Handler = fn(ServerRequest, Arc<Server>) -> Response;
+pub type Handler = fn(ServerRequest, Arc<Server>) -> Response;
 
 /// Server is a simple HTT/2 server
 pub struct Server {
@@ -118,8 +141,6 @@ impl Server {
             srv.cache = Some(Cache::new(srv.webroot.clone()));
             info!("Response caching enabled.");
         }
-
-        srv.add_handler(Action::GET("/hello".to_string()), hello_handler);
 
         Ok(Arc::new(srv))
     }
@@ -253,15 +274,6 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
     }
 }
 
-/// hello_handler processes a request for a greeting.
-fn hello_handler(req: ServerRequest, _srv: Arc<Server>) -> Response {
-    Response {
-        stream_id: req.stream_id,
-        headers: vec![(b":status".to_vec(), b"200".to_vec())],
-        body: b"Hello world!".to_vec(),
-    }
-}
-
 /// file_handler processes a request for a file. It always returns a Response.
 fn file_handler(req: ServerRequest, srv: Arc<Server>) -> Response {
     let mut filename = srv.webroot.clone();
@@ -328,17 +340,17 @@ fn handle_cache_entry((entry, found): (Entry, bool)) -> Response {
 }
 
 /// Action is an HTTP method and path combination.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Hash)]
-enum Action {
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
+pub enum Action {
     GET(String),
 }
 
 /// ServerRequest represents a fully received request.
-struct ServerRequest<'a> {
-    action: Action,
-    stream_id: StreamId,
-    headers: &'a [Header],
-    body: &'a [u8],
+pub struct ServerRequest<'a> {
+    pub action: Action,
+    pub stream_id: StreamId,
+    pub headers: &'a [Header],
+    pub body: &'a [u8],
 }
 
 impl<'a> ServerRequest<'a> {

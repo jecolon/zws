@@ -6,8 +6,7 @@ pub mod mcache;
 pub mod server;
 
 pub use error::Result;
-pub use server::Server;
-pub use server::ServerBuilder;
+pub use server::{Action, Handler, Server, ServerBuilder, ServerRequest};
 
 #[cfg(test)]
 mod tests {

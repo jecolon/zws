@@ -1,8 +1,11 @@
 use std::env;
+use std::sync::Arc;
+
+use solicit::http::Response;
 
 use docopt::Docopt;
 
-use zws;
+use zws::{self, Action};
 
 fn main() -> zws::Result<()> {
     const USAGE: &'static str = "
@@ -29,9 +32,21 @@ Options:
 ";
 
     let argv = env::args();
-    let builder: zws::ServerBuilder = Docopt::new(USAGE)
+    let mut builder: zws::ServerBuilder = Docopt::new(USAGE)
         .and_then(|d| d.argv(argv.into_iter()).deserialize())
         .unwrap_or_else(|e| e.exit());
 
-    builder.build()?.run()
+    builder
+        .handler(Action::GET("/hello".to_string()), hello_handler)
+        .build()?
+        .run()
+}
+
+/// hello_handler processes a request for a greeting.
+fn hello_handler(req: zws::ServerRequest, _srv: Arc<zws::Server>) -> Response {
+    Response {
+        stream_id: req.stream_id,
+        headers: vec![(b":status".to_vec(), b"200".to_vec())],
+        body: b"Hello world!".to_vec(),
+    }
 }

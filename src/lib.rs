@@ -11,7 +11,7 @@ pub mod tls;
 pub use error::Result;
 pub use handlers::Handler;
 pub use request::{Action, ServerRequest};
-pub use server::{Server, ServerBuilder};
+pub use server::Server;
 
 #[cfg(test)]
 mod tests {

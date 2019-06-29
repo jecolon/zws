@@ -24,6 +24,10 @@ pub struct Cache {
 
 impl Cache {
     pub fn new(webroot: PathBuf) -> Arc<Cache> {
+        debug!(
+            "new: starting file response cache for webroot: {:?}",
+            webroot
+        );
         let cache_1 = Arc::new(Cache {
             webroot: webroot,
             store: RwLock::new(HashMap::<String, Entry, BuildHasher>::default()),
@@ -35,9 +39,11 @@ impl Cache {
 
     pub fn get(self: Arc<Self>, key: &str) -> (Entry, bool) {
         if let Some(value) = self.store.read().unwrap().get(key) {
+            debug!("get: cache hit for {}", key);
             return (Arc::clone(&value), true);
         }
 
+        debug!("get: cache miss for {}", key);
         let value = Arc::new((Mutex::new(false), Condvar::new(), RwLock::new(None)));
         let clone = Arc::clone(&value);
         self.store.write().unwrap().insert(key.to_string(), clone);
@@ -63,10 +69,12 @@ impl Cache {
     }
 
     pub fn del(&self, key: &str) {
+        debug!("del: removing cache entry with key: {}", key);
         self.store.write().unwrap().remove(key);
     }
 
     pub fn put(&self, key: &str, value: Entry) {
+        debug!("put: inserting cache entry with key: {}", key);
         self.store.write().unwrap().insert(key.to_string(), value);
     }
 }
@@ -167,6 +175,7 @@ pub fn get_ctype(filename: &str) -> &str {
 
 /// watch is a file system even processor that maintains the cache up-to-date.
 fn watch(cache: Arc<Cache>) -> notify::Result<()> {
+    debug!("watch: watching FS at {:?}", &cache.webroot);
     // Create a channel to receive the events.
     let (tx, rx) = mpsc::channel();
 
@@ -184,9 +193,11 @@ fn watch(cache: Arc<Cache>) -> notify::Result<()> {
         match rx.recv() {
             Ok(event) => match event {
                 notify::DebouncedEvent::Write(path) | notify::DebouncedEvent::Remove(path) => {
+                    debug!("watch: FS event write or remove for {:?}", &path);
                     cache.del(&path.to_string_lossy());
                 }
                 notify::DebouncedEvent::Rename(path, _) => {
+                    debug!("watch: FS event rename for {:?}", &path);
                     cache.del(&path.to_string_lossy());
                 }
                 _ => continue,

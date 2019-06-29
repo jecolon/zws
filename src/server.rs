@@ -2,14 +2,12 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use env_logger::Env;
 use openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 use seahash::SeaHasher;
-use serde::Deserialize;
 use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
 use solicit::http::session::{DefaultSessionState, SessionState, Stream};
@@ -17,86 +15,9 @@ use solicit::http::transport::TransportStream;
 use solicit::http::HttpScheme;
 
 use crate::error::Result;
-use crate::handlers::{file_handler, Handler};
-use crate::mcache::Cache;
+use crate::handlers::{Handler, NotFound};
 use crate::request::{Action, ServerRequest};
 use crate::tls::Wrapper;
-
-/// ServerBuilder builds a Server providing sensible defaults.
-#[derive(Deserialize)]
-pub struct ServerBuilder {
-    pub flag_nocache: bool,
-    pub flag_cert: String,
-    pub flag_key: String,
-    pub flag_socket: String,
-    pub flag_webroot: String,
-    #[serde(skip)]
-    handlers: HashMap<Action, Handler, BuildHasher>,
-}
-
-impl ServerBuilder {
-    pub fn new() -> ServerBuilder {
-        ServerBuilder {
-            flag_nocache: false,
-            flag_cert: "tls/dev/cert.pem".to_string(),
-            flag_key: "tls/dev/key.pem".to_string(),
-            flag_socket: "127.0.0.1:8443".to_string(),
-            flag_webroot: "webroot".to_string(),
-            handlers: HashMap::<Action, Handler, BuildHasher>::default(),
-        }
-    }
-
-    pub fn without_cache(&mut self) -> &mut Self {
-        self.flag_nocache = true;
-        self
-    }
-
-    pub fn cert(&mut self, cert: &str) -> &mut Self {
-        self.flag_cert = cert.to_string();
-        self
-    }
-
-    pub fn key(&mut self, key: &str) -> &mut Self {
-        self.flag_key = key.to_string();
-        self
-    }
-
-    pub fn socket(&mut self, socket: &str) -> &mut Self {
-        self.flag_socket = socket.to_string();
-        self
-    }
-
-    pub fn webroot(&mut self, webroot: &str) -> &mut Self {
-        self.flag_webroot = webroot.to_string();
-        self
-    }
-
-    pub fn handler(&mut self, action: Action, handler: Handler) -> &mut Self {
-        self.handlers.insert(action, handler);
-        self
-    }
-
-    pub fn build(&self) -> Result<Arc<Server>> {
-        let srv = Server::new(
-            self.flag_nocache,
-            &self.flag_cert,
-            &self.flag_key,
-            &self.flag_socket,
-            &self.flag_webroot,
-        )?;
-
-        let mut srv = match Arc::try_unwrap(srv) {
-            Ok(srv) => srv,
-            Err(_) => {
-                panic!("unable to build Server");
-            }
-        };
-
-        srv.router.clone_from(&self.handlers);
-
-        Ok(Arc::new(srv))
-    }
-}
 
 /// BuildHasher lets us use SeaHasher with HashMap.
 type BuildHasher = BuildHasherDefault<SeaHasher>;
@@ -105,37 +26,24 @@ type BuildHasher = BuildHasherDefault<SeaHasher>;
 pub struct Server {
     acceptor: Arc<SslAcceptor>,
     listener: TcpListener,
-    pub cache: Option<Arc<Cache>>,
-    pub webroot: PathBuf,
-    router: HashMap<Action, Handler, BuildHasher>,
+    router: HashMap<Action, Box<Handler>, BuildHasher>,
+    not_found: Box<Handler>,
 }
 
 impl Server {
     /// new returns an initialized instance of Server
-    pub fn new(
-        nocache: bool,
-        cert: &String,
-        key: &String,
-        socket: &String,
-        webroot: &String,
-    ) -> Result<Arc<Server>> {
+    pub fn new(cert: &String, key: &String, socket: &String) -> Result<Arc<Server>> {
         env_logger::from_env(Env::default().default_filter_or("info")).init();
 
-        let mut srv = Server {
+        let srv = Server {
             acceptor: Server::new_acceptor(&cert, &key)?,
             listener: TcpListener::bind(&socket)?,
-            cache: None,
-            webroot: PathBuf::from(&webroot).canonicalize()?,
-            router: HashMap::<Action, Handler, BuildHasher>::default(),
+            router: HashMap::<Action, Box<Handler>, BuildHasher>::default(),
+            not_found: Box::new(NotFound {}),
         };
 
         println!("zws HTTP server listening on {}. CTRL+C to stop.", &socket);
-        info!("Serving files in {}", &webroot);
         info!("Using certificate: {}, and key: {}.", &cert, &key);
-        if !nocache {
-            srv.cache = Some(Cache::new(srv.webroot.clone()));
-            info!("Response caching enabled.");
-        }
 
         Ok(Arc::new(srv))
     }
@@ -157,16 +65,34 @@ impl Server {
     }
 
     /// add_handler registers a handler for a given Action.
-    pub fn add_handler(&mut self, action: Action, handler: Handler) {
-        self.router.insert(action, handler);
+    pub fn add_handler(self: Arc<Self>, action: Action, handler: Box<Handler>) -> Arc<Self> {
+        let mut srv = match Arc::try_unwrap(self) {
+            Ok(srv) => srv,
+            Err(_) => panic!("unalble to move out of Arc"),
+        };
+        srv.router.insert(action, handler);
+        Arc::new(srv)
     }
 
     /// handler returns a handler for a given Action, or file_handler if none found.
-    fn handler(&self, action: &Action) -> Handler {
+    fn handler(&self, action: &Action) -> &Box<Handler> {
         if let Some(h) = self.router.get(&action) {
-            return *h;
+            return h;
         }
-        return file_handler;
+
+        let mut path = match action {
+            Action::GET(path) => PathBuf::from(path),
+            _ => unimplemented!(),
+        };
+
+        while path.pop() {
+            let action = Action::GET(PathBuf::from(&path));
+            if let Some(h) = self.router.get(&action) {
+                return h;
+            }
+        }
+
+        &self.not_found
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
@@ -230,9 +156,8 @@ fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
                         return;
                     }
                 };
-                debug!("received request: {:?}", req.action);
-                let srv = Arc::clone(&srv);
-                responses.push(srv.handler(&req.action)(req, srv));
+                debug!("handle_stream: received request: {:?}", req.action);
+                responses.push(srv.handler(&req.action).handle(req));
             }
         }
 

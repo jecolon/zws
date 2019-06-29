@@ -54,7 +54,7 @@ impl Server {
             match stream {
                 Ok(stream) => {
                     let srv = Arc::clone(&self);
-                    thread::spawn(move || handle_stream(stream, srv));
+                    thread::spawn(move || srv.handle_stream(stream));
                 }
                 Err(e) => {
                     warn!("error in TCP accept: {}", e);
@@ -113,83 +113,84 @@ impl Server {
 
         Ok(Arc::new(acceptor.build()))
     }
-}
 
-/// handle_stream processess an HTTP/2 TCP/TLS streaml
-fn handle_stream(stream: TcpStream, srv: Arc<Server>) {
-    let acceptor = Arc::clone(&srv.acceptor);
-    let stream = match acceptor.accept(stream) {
-        Ok(stream) => stream,
-        Err(e) => {
-            warn!("error in TLS accept: {}", e);
+    /// handle_stream processess an HTTP/2 TCP/TLS streaml
+    fn handle_stream(&self, stream: TcpStream) {
+        let acceptor = Arc::clone(&self.acceptor);
+        let stream = match acceptor.accept(stream) {
+            Ok(stream) => stream,
+            Err(e) => {
+                warn!("error in TLS accept: {}", e);
+                return;
+            }
+        };
+        let mut stream = Wrapper(Arc::new(Mutex::new(stream)));
+
+        let mut preface = [0; 24];
+        if let Err(e) = TransportStream::read_exact(&mut stream, &mut preface) {
+            warn!("error reading from client connection: {}", e);
             return;
         }
-    };
-    let mut stream = Wrapper(Arc::new(Mutex::new(stream)));
+        if &preface != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" {
+            warn!("error in HTTP2 preface: {:?}", &preface);
+            return;
+        }
 
-    let mut preface = [0; 24];
-    if let Err(e) = TransportStream::read_exact(&mut stream, &mut preface) {
-        warn!("error reading from client connection: {}", e);
-        return;
-    }
-    if &preface != b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" {
-        warn!("error in HTTP2 preface: {:?}", &preface);
-        return;
-    }
+        let conn = HttpConnection::<Wrapper, Wrapper>::with_stream(stream, HttpScheme::Https);
+        let mut conn: ServerConnection<Wrapper, Wrapper> =
+            ServerConnection::with_connection(conn, DefaultSessionState::new());
+        if let Err(e) = conn.init() {
+            error!("error binding to TCP socket: {}", e);
+            return;
+        };
 
-    let conn = HttpConnection::<Wrapper, Wrapper>::with_stream(stream, HttpScheme::Https);
-    let mut conn: ServerConnection<Wrapper, Wrapper> =
-        ServerConnection::with_connection(conn, DefaultSessionState::new());
-    if let Err(e) = conn.init() {
-        error!("error binding to TCP socket: {}", e);
-        return;
-    };
+        while let Ok(_) = conn.handle_next_frame() {
+            let mut responses = Vec::new();
+            for stream in conn.state.iter() {
+                if stream.is_closed_remote() {
+                    let req = match ServerRequest::new(&stream) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            warn!("error processing request: {}", e);
+                            return;
+                        }
+                    };
+                    debug!("handle_stream: received request: {:?}", req.action);
+                    responses.push(self.handler(&req.action).handle(req));
+                }
+            }
 
-    while let Ok(_) = conn.handle_next_frame() {
-        let mut responses = Vec::new();
-        for stream in conn.state.iter() {
-            if stream.is_closed_remote() {
-                let req = match ServerRequest::new(&stream) {
-                    Ok(req) => req,
-                    Err(e) => {
-                        warn!("error processing request: {}", e);
+            for response in responses {
+                if let Err(e) =
+                    conn.start_response(response.headers, response.stream_id, EndStream::No)
+                {
+                    warn!("error starting response: {}", e);
+                    return;
+                }
+                let stream = match conn.state.get_stream_mut(response.stream_id) {
+                    Some(stream) => stream,
+                    None => {
+                        warn!("error getting mutable stream");
                         return;
                     }
                 };
-                debug!("handle_stream: received request: {:?}", req.action);
-                responses.push(srv.handler(&req.action).handle(req));
+                stream.set_full_data(response.body);
             }
-        }
 
-        for response in responses {
-            if let Err(e) = conn.start_response(response.headers, response.stream_id, EndStream::No)
-            {
-                warn!("error starting response: {}", e);
-                return;
-            }
-            let stream = match conn.state.get_stream_mut(response.stream_id) {
-                Some(stream) => stream,
-                None => {
-                    warn!("error getting mutable stream");
-                    return;
-                }
-            };
-            stream.set_full_data(response.body);
-        }
-
-        loop {
-            match conn.send_next_data() {
-                Ok(status) => {
-                    if status != SendStatus::Sent {
+            loop {
+                match conn.send_next_data() {
+                    Ok(status) => {
+                        if status != SendStatus::Sent {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("error sending next data: {}", e);
                         break;
                     }
                 }
-                Err(e) => {
-                    warn!("error sending next data: {}", e);
-                    break;
-                }
             }
+            let _ = conn.state.get_closed();
         }
-        let _ = conn.state.get_closed();
     }
 }

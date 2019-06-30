@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::hash::BuildHasherDefault;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
 use std::{io, str, thread, time};
 
@@ -16,18 +16,15 @@ pub type Entry = Arc<(Mutex<bool>, Condvar, RwLock<Option<Response>>)>;
 type BuildHasher = BuildHasherDefault<SeaHasher>;
 
 pub struct Cache {
-    pub webroot: PathBuf,
+    pub webroot: String,
     store: RwLock<HashMap<String, Entry, BuildHasher>>,
 }
 
 impl Cache {
-    pub fn new(webroot: PathBuf) -> Arc<Cache> {
-        debug!(
-            "new: starting file response cache for webroot: {:?}",
-            webroot
-        );
+    pub fn new(webroot: &str) -> Arc<Cache> {
+        debug!("new: starting file response cache for webroot: {}", webroot);
         let cache_1 = Arc::new(Cache {
-            webroot: webroot,
+            webroot: webroot.to_string(),
             store: RwLock::new(HashMap::<String, Entry, BuildHasher>::default()),
         });
         let cache_2 = Arc::clone(&cache_1);
@@ -78,10 +75,10 @@ impl Cache {
 }
 
 /// file_response produces a response for the given filename.
-pub fn file_response(webroot: &PathBuf, filename: &str) -> (Response, bool) {
+pub fn file_response(webroot: &str, filename: &str) -> (Response, bool) {
     let path = Path::new(&filename);
     if path.is_dir() {
-        let webroot_len = webroot.to_string_lossy().len() + 1;
+        let webroot_len = webroot.len() + 1;
         let redirect = format!("{}/index.html", &filename[webroot_len..]).into_bytes();
         debug!(
             "file_response: redirecting dir request without trailing slash to {}",
@@ -165,7 +162,7 @@ pub fn get_ctype(filename: &str) -> &str {
 
 /// watch is a file system even processor that maintains the cache up-to-date.
 fn watch(cache: Arc<Cache>) -> notify::Result<()> {
-    debug!("watch: watching FS at {:?}", &cache.webroot);
+    debug!("watch: watching FS at {}", cache.webroot);
     // Create a channel to receive the events.
     let (tx, rx) = mpsc::channel();
 
@@ -175,20 +172,28 @@ fn watch(cache: Arc<Cache>) -> notify::Result<()> {
 
     // Add a path to be watched. All files and directories at that path and
     // below will be monitored for changes.
-    watcher.watch(cache.webroot.to_str().unwrap(), RecursiveMode::Recursive)?;
+    watcher.watch(&cache.webroot, RecursiveMode::Recursive)?;
 
     // This is a simple loop, but you may want to use more complex logic here,
     // for example to handle I/O.
+    let webroot_len = Path::new(&cache.webroot)
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .len()
+        - cache.webroot.len();
     loop {
         match rx.recv() {
             Ok(event) => match event {
                 notify::DebouncedEvent::Write(path) | notify::DebouncedEvent::Remove(path) => {
-                    debug!("watch: FS event write or remove for {:?}", &path);
-                    cache.del(&path.to_string_lossy());
+                    let rel_path = &path.to_string_lossy()[webroot_len..];
+                    debug!("watch: FS event write or remove for {}", rel_path);
+                    cache.del(rel_path);
                 }
                 notify::DebouncedEvent::Rename(path, _) => {
-                    debug!("watch: FS event rename for {:?}", &path);
-                    cache.del(&path.to_string_lossy());
+                    let rel_path = &path.to_string_lossy()[webroot_len..];
+                    debug!("watch: FS event rename for {}", rel_path);
+                    cache.del(rel_path);
                 }
                 _ => continue,
             },

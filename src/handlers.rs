@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::str;
 use std::sync::Arc;
 
@@ -13,16 +12,16 @@ pub trait Handler: Send + Sync {
     fn handle(&self, req: ServerRequest) -> Response;
 }
 
-pub struct StaticFile {
+pub struct StaticFile<'a> {
     cache: Option<Arc<Cache>>,
-    webroot: PathBuf,
+    webroot: &'a str,
 }
 
-impl StaticFile {
+impl<'a> StaticFile<'a> {
     pub fn new(webroot: &str, caching: bool) -> Result<StaticFile> {
         let mut sf = StaticFile {
             cache: None,
-            webroot: PathBuf::from(webroot).canonicalize()?,
+            webroot: webroot,
         };
 
         if caching {
@@ -50,7 +49,7 @@ impl StaticFile {
     }
 }
 
-impl Handler for StaticFile {
+impl<'a> Handler for StaticFile<'a> {
     fn handle(&self, req: ServerRequest) -> Response {
         let path = match req.header(":path") {
             Some(path) => path,
@@ -62,8 +61,8 @@ impl Handler for StaticFile {
                 }
             }
         };
-        debug!("FileHandler: path is {}", &path);
-        let filename = format!("{}{}", self.webroot.to_string_lossy(), path);
+        debug!("FileHandler: path is {}", path);
+        let filename = format!("{}{}", self.webroot, path);
         debug!("FileHandler: filename is {}", &filename);
 
         let mut response = match &self.cache {
@@ -71,7 +70,7 @@ impl Handler for StaticFile {
                 let cache = Arc::clone(&cache);
                 self.handle_cache_entry(cache.get(&filename))
             }
-            None => mcache::file_response(&self.webroot, &filename).0,
+            None => mcache::file_response(self.webroot, &filename).0,
         };
 
         response.stream_id = req.stream_id;

@@ -32,29 +32,34 @@ pub struct Server {
 
 impl Server {
     /// new returns an initialized instance of Server
-    pub fn new(cert: &String, key: &String, socket: &String) -> Result<Arc<Server>> {
+    pub fn new(cert: &String, key: &String, socket: &String) -> Result<Server> {
         env_logger::from_env(Env::default().default_filter_or("info")).init();
-
-        let srv = Server {
-            acceptor: Server::new_acceptor(&cert, &key)?,
-            listener: TcpListener::bind(&socket)?,
-            router: HashMap::<Action, Box<Handler>, BuildHasher>::default(),
-            not_found: Box::new(NotFound {}),
-        };
 
         println!("zws HTTP server listening on {}. CTRL+C to stop.", &socket);
         info!("Using certificate: {}, and key: {}.", &cert, &key);
 
-        Ok(Arc::new(srv))
+        Ok(Server {
+            acceptor: Server::new_acceptor(&cert, &key)?,
+            listener: TcpListener::bind(&socket)?,
+            router: HashMap::<Action, Box<Handler>, BuildHasher>::default(),
+            not_found: Box::new(NotFound {}),
+        })
+    }
+
+    /// add_handler registers a handler for a given Action.
+    pub fn add_handler(mut self, action: Action, handler: Box<Handler>) -> Self {
+        self.router.insert(action, handler);
+        self
     }
 
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
-    pub fn run(self: Arc<Self>) -> Result<()> {
-        for stream in self.listener.incoming() {
+    pub fn run(self) -> Result<()> {
+        let srv = Arc::new(self);
+        for stream in srv.listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    let srv = Arc::clone(&self);
-                    thread::spawn(move || srv.handle_stream(stream));
+                    let clone = Arc::clone(&srv);
+                    thread::spawn(move || clone.handle_stream(stream));
                 }
                 Err(e) => {
                     warn!("error in TCP accept: {}", e);
@@ -62,16 +67,6 @@ impl Server {
             }
         }
         Ok(())
-    }
-
-    /// add_handler registers a handler for a given Action.
-    pub fn add_handler(self: Arc<Self>, action: Action, handler: Box<Handler>) -> Arc<Self> {
-        let mut srv = match Arc::try_unwrap(self) {
-            Ok(srv) => srv,
-            Err(_) => panic!("unalble to move out of Arc"),
-        };
-        srv.router.insert(action, handler);
-        Arc::new(srv)
     }
 
     /// handler returns a handler for a given Action, or file_handler if none found.

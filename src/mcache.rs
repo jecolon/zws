@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs;
 use std::hash::BuildHasherDefault;
-use std::io::prelude::*;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
 use std::{io, str, thread, time};
@@ -101,10 +99,10 @@ pub fn file_response(filename: &str) -> (Response, bool) {
         );
     }
 
-    let file = match File::open(path) {
-        Ok(file) => file,
+    let buf = match fs::read(path) {
+        Ok(buf) => buf,
         Err(e) => {
-            eprintln!("error opening file {}: {}", filename, e);
+            eprintln!("error reading file {}: {}", filename, e);
             if io::ErrorKind::NotFound == e.kind() {
                 return (
                     Response {
@@ -118,42 +116,13 @@ pub fn file_response(filename: &str) -> (Response, bool) {
             return (
                 Response {
                     headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                    body: b"Unable to get file\n".to_vec(),
+                    body: b"Unable to read file\n".to_vec(),
                     stream_id: 0,
                 },
                 true,
             );
         }
     };
-
-    let meta = match file.metadata() {
-        Ok(meta) => meta,
-        Err(e) => {
-            eprintln!("error reading file {} metadata: {}", filename, e);
-            return (
-                Response {
-                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                    body: b"Unable to get file metadata\n".to_vec(),
-                    stream_id: 0,
-                },
-                true,
-            );
-        }
-    };
-
-    let mut buf_reader = BufReader::new(file);
-    let mut buf = Vec::with_capacity(meta.len() as usize);
-    if let Err(e) = buf_reader.read_to_end(&mut buf) {
-        eprintln!("error reading file {}: {}", filename, e);
-        return (
-            Response {
-                headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                body: b"Unable to read file\n".to_vec(),
-                stream_id: 0,
-            },
-            true,
-        );
-    }
 
     let ctype = get_ctype(filename);
 

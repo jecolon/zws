@@ -82,7 +82,6 @@ impl Server {
 
         let mut path = match action {
             Action::GET(path) => PathBuf::from(path),
-            _ => unimplemented!(),
         };
 
         while path.pop() {

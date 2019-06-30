@@ -71,7 +71,7 @@ impl Handler for StaticFile {
                 let cache = Arc::clone(&cache);
                 self.handle_cache_entry(cache.get(&filename))
             }
-            None => mcache::file_response(&filename).0,
+            None => mcache::file_response(&self.webroot, &filename).0,
         };
 
         response.stream_id = req.stream_id;

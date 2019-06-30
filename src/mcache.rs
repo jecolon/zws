@@ -53,7 +53,7 @@ impl Cache {
             let &(ref mtx, ref cnd, ref rwl) = &*clone;
             let mut rwl_guard = rwl.write().unwrap();
             let mut guard = mtx.lock().unwrap();
-            let (resp, err) = file_response(&k);
+            let (resp, err) = file_response(&c.webroot, &k);
             if err {
                 c.store.write().unwrap().remove(&k);
             }
@@ -78,10 +78,11 @@ impl Cache {
 }
 
 /// file_response produces a response for the given filename.
-pub fn file_response(filename: &str) -> (Response, bool) {
+pub fn file_response(webroot: &PathBuf, filename: &str) -> (Response, bool) {
     let path = Path::new(&filename);
     if path.is_dir() {
-        let redirect = format!("{}/index.html", &filename[35..]).into_bytes();
+        let webroot_len = webroot.to_string_lossy().len() + 1;
+        let redirect = format!("{}/index.html", &filename[webroot_len..]).into_bytes();
         debug!(
             "file_response: redirecting dir request without trailing slash to {}",
             str::from_utf8(&redirect).unwrap()

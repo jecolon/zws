@@ -1,6 +1,6 @@
 use std::path::PathBuf;
+use std::str;
 use std::sync::Arc;
-use std::{io, str};
 
 use solicit::http::Response;
 
@@ -52,8 +52,8 @@ impl StaticFile {
 
 impl Handler for StaticFile {
     fn handle(&self, req: ServerRequest) -> Response {
-        let (mut path, original) = match req.header(":path") {
-            Some(path) => (PathBuf::from(&self.webroot).join(&path[1..]), path),
+        let path = match req.header(":path") {
+            Some(path) => path,
             None => {
                 return Response {
                     stream_id: req.stream_id,
@@ -62,52 +62,8 @@ impl Handler for StaticFile {
                 }
             }
         };
-        debug!("FileHandler: path is {:?}", &path);
-        let is_dir = path.is_dir();
-        if !original.ends_with("/") && is_dir {
-            let path_with_slash = format!("{}{}", original, "/");
-            debug!(
-                "FileHandler: redirecting dir path without trailing slash to {}",
-                path_with_slash
-            );
-            return Response {
-                stream_id: req.stream_id,
-                headers: vec![
-                    (b":status".to_vec(), b"307".to_vec()),
-                    (b"location".to_vec(), path_with_slash.into_bytes()),
-                ],
-                body: b"Moved Temporarily\n".to_vec(),
-            };
-        }
-
-        if is_dir {
-            path.push("index.html");
-        }
-
-        let path = match path.canonicalize() {
-            Ok(path) => path,
-            Err(e) => {
-                debug!("FileHandler: error canonicalizing path {:?}: {}", path, e);
-                match e.kind() {
-                    io::ErrorKind::NotFound => {
-                        return Response {
-                            stream_id: req.stream_id,
-                            headers: vec![(b":status".to_vec(), b"404".to_vec())],
-                            body: b"Not Found\n".to_vec(),
-                        }
-                    }
-                    _ => {
-                        return Response {
-                            stream_id: req.stream_id,
-                            headers: vec![(b":status".to_vec(), b"400".to_vec())],
-                            body: b"Bad Request\n".to_vec(),
-                        }
-                    }
-                }
-            }
-        };
-
-        let filename = path.to_string_lossy();
+        debug!("FileHandler: path is {}", &path);
+        let filename = format!("{}{}", self.webroot.to_string_lossy(), path);
         debug!("FileHandler: filename is {}", &filename);
 
         let mut response = match &self.cache {

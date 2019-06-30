@@ -3,7 +3,7 @@ use std::fs::File;
 use std::hash::BuildHasherDefault;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
 use std::{io, str, thread, time};
 
@@ -81,7 +81,27 @@ impl Cache {
 
 /// file_response produces a response for the given filename.
 pub fn file_response(filename: &str) -> (Response, bool) {
-    let file = match File::open(filename) {
+    let path = Path::new(&filename);
+    if path.is_dir() {
+        let redirect = format!("{}/index.html", &filename[35..]).into_bytes();
+        debug!(
+            "file_response: redirecting dir request without trailing slash to {}",
+            str::from_utf8(&redirect).unwrap()
+        );
+        return (
+            Response {
+                headers: vec![
+                    (b":status".to_vec(), b"307".to_vec()),
+                    (b"location".to_vec(), redirect),
+                ],
+                body: b"Moved Termporarily\n".to_vec(),
+                stream_id: 0,
+            },
+            true,
+        );
+    }
+
+    let file = match File::open(path) {
         Ok(file) => file,
         Err(e) => {
             eprintln!("error opening file {}: {}", filename, e);

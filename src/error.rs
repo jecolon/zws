@@ -6,6 +6,7 @@ pub type Result<T> = result::Result<T, ServerError>;
 
 #[derive(Debug)]
 pub enum ServerError {
+    ParseAction,
     BadRequest,
     Io(io::Error),
     Ssl(SslErrorStack),
@@ -14,6 +15,7 @@ pub enum ServerError {
 impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            ServerError::ParseAction => write!(f, "Error parsing Action"),
             ServerError::BadRequest => write!(f, "Bad request"),
             ServerError::Io(ref err) => write!(f, "Io error: {}", err),
             ServerError::Ssl(ref err) => write!(f, "SSL error: {}", err),
@@ -24,6 +26,7 @@ impl fmt::Display for ServerError {
 impl error::Error for ServerError {
     fn description(&self) -> &str {
         match *self {
+            ServerError::ParseAction => "Error parsing Action",
             ServerError::BadRequest => "Bad request",
             ServerError::Io(ref err) => err.description(),
             ServerError::Ssl(ref err) => err.description(),
@@ -32,6 +35,7 @@ impl error::Error for ServerError {
 
     fn cause(&self) -> Option<&error::Error> {
         match *self {
+            ServerError::ParseAction => None,
             ServerError::BadRequest => None,
             ServerError::Io(ref err) => Some(err),
             ServerError::Ssl(ref err) => Some(err),

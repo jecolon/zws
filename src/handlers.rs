@@ -18,7 +18,7 @@ pub struct StaticFile<'a> {
 }
 
 impl<'a> StaticFile<'a> {
-    pub fn new(webroot: &str, caching: bool) -> Result<StaticFile> {
+    pub fn new(webroot: &str, caching: bool) -> Result<Box<StaticFile>> {
         let mut sf = StaticFile {
             cache: None,
             webroot: webroot,
@@ -28,7 +28,7 @@ impl<'a> StaticFile<'a> {
             sf.cache = Some(Cache::new(sf.webroot.clone()));
         }
 
-        Ok(sf)
+        Ok(Box::new(sf))
     }
 
     /// handle_cache_entry performs a cache get and unwraps the Response.

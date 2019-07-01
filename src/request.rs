@@ -1,4 +1,4 @@
-use std::str;
+use std::str::{self, FromStr};
 
 use solicit::http::session::DefaultStream;
 use solicit::http::{Header, StreamId};
@@ -9,6 +9,23 @@ use crate::error::{Result, ServerError};
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Action {
     GET(String),
+}
+
+impl FromStr for Action {
+    type Err = ServerError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(' ').map(|p| p.trim()).collect();
+
+        if parts.len() > 2 {
+            return Err(ServerError::ParseAction);
+        }
+
+        match &parts[0].to_uppercase()[..] {
+            "GET" => Ok(Action::GET(parts[1].to_string())),
+            _ => Err(ServerError::ParseAction),
+        }
+    }
 }
 
 /// ServerRequest represents a fully received request.

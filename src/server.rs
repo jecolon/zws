@@ -47,9 +47,9 @@ impl Server {
     }
 
     /// add_handler registers a handler for a given Action.
-    pub fn add_handler(mut self, action: Action, handler: Box<Handler>) -> Self {
-        self.router.insert(action, handler);
-        self
+    pub fn add_handler(mut self, action: &str, handler: Box<Handler>) -> Result<Self> {
+        self.router.insert(action.parse()?, handler);
+        Ok(self)
     }
 
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.

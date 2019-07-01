@@ -1,17 +1,21 @@
 use zws::handlers::StaticFile;
-use zws::{Action, Handler, Response, Server, ServerRequest};
+use zws::{Handler, Response, Server, ServerRequest};
 
 fn main() -> zws::Result<()> {
     Server::new("tls/dev/cert.pem", "tls/dev/key.pem", "127.0.0.1:8443")?
-        .add_handler(Action::GET("/hello".to_string()), Box::new(HelloHandler {}))
-        .add_handler(
-            Action::GET("/".to_string()),
-            Box::new(StaticFile::new("webroot", true)?),
-        )
+        .add_handler("GET /hello", HelloHandler::new())?
+        .add_handler("GET /hello/world", HelloHandler::new())?
+        .add_handler("GET /", StaticFile::new("webroot", true)?)?
         .run()
 }
 
 struct HelloHandler;
+
+impl HelloHandler {
+    fn new() -> Box<HelloHandler> {
+        Box::new(HelloHandler {})
+    }
+}
 
 impl Handler for HelloHandler {
     fn handle(&self, req: ServerRequest) -> Response {

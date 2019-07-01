@@ -15,15 +15,21 @@ impl FromStr for Action {
     type Err = ServerError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(' ').map(|p| p.trim()).collect();
+        let parts: Vec<&str> = s.trim().split(' ').map(|p| p.trim()).collect();
 
         if parts.len() > 2 {
-            return Err(ServerError::ParseAction);
+            return Err(ServerError::ParseAction(format!(
+                "Request actions have 2 parts, got {}",
+                parts.len()
+            )));
         }
 
         match &parts[0].to_uppercase()[..] {
             "GET" => Ok(Action::GET(parts[1].to_string())),
-            _ => Err(ServerError::ParseAction),
+            _ => Err(ServerError::ParseAction(format!(
+                "Request action verb unknown: {}",
+                parts[0]
+            ))),
         }
     }
 }

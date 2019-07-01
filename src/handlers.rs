@@ -51,18 +51,8 @@ impl<'a> StaticFile<'a> {
 
 impl<'a> Handler for StaticFile<'a> {
     fn handle(&self, req: ServerRequest) -> Response {
-        let path = match req.header(":path") {
-            Some(path) => path,
-            None => {
-                return Response {
-                    stream_id: req.stream_id,
-                    headers: vec![(b":status".to_vec(), b"400".to_vec())],
-                    body: b"Bad Request\n".to_vec(),
-                }
-            }
-        };
-        debug!("FileHandler: path is {}", path);
-        let filename = format!("{}{}", self.webroot, path);
+        debug!("FileHandler: path is {}", &req.path);
+        let filename = format!("{}{}", self.webroot, &req.path);
         debug!("FileHandler: filename is {}", &filename);
 
         let mut response = match &self.cache {

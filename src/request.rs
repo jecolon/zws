@@ -1,3 +1,4 @@
+use std::fmt;
 use std::str::{self, FromStr};
 
 use solicit::http::session::DefaultStream;
@@ -37,6 +38,9 @@ impl FromStr for Action {
 /// ServerRequest represents a fully received request.
 pub struct ServerRequest<'a> {
     pub action: Action,
+    pub method: String,
+    pub path: String,
+    pub query: String,
     pub stream_id: StreamId,
     pub headers: &'a [Header],
     pub body: &'a [u8],
@@ -54,42 +58,53 @@ impl<'a> ServerRequest<'a> {
 
         let mut req = ServerRequest {
             action: Action::GET(String::new()),
+            method: "".to_string(),
+            path: "".to_string(),
+            query: "".to_string(),
             stream_id: stream.stream_id,
             headers: headers,
             body: &stream.body,
         };
 
-        req.action = match req.header(":method") {
-            Some(method) => match method {
-                "GET" => {
-                    let path = match req.header(":path") {
-                        Some(path) => path,
-                        None => {
-                            warn!("error, request without :path header");
-                            return Err(ServerError::BadRequest);
-                        }
-                    };
-                    Action::GET(String::from(path))
-                }
-                _ => {
-                    warn!("error, unsupported request method");
-                    return Err(ServerError::BadRequest);
-                }
-            },
+        req.method = match req.header(":method") {
+            Some(method) => method,
             None => {
                 warn!("error, request without :method header");
                 return Err(ServerError::BadRequest);
             }
         };
 
+        match req.header(":path") {
+            Some(path) => {
+                let parts: Vec<&str> = path.split('?').collect();
+                req.path = parts[0].to_string();
+                if parts.len() > 1 {
+                    req.query = parts[1].to_string();
+                }
+            }
+            None => {
+                warn!("error, request without :path header");
+                return Err(ServerError::BadRequest);
+            }
+        }
+
+        req.action = match req.method.as_str() {
+            "GET" => Action::GET(req.path.clone()),
+            _ => {
+                warn!("error, unsupported request method: {}", req.method);
+                return Err(ServerError::BadRequest);
+            }
+        };
+
+        debug!("new: ServerRequest: {}", &req);
         Ok(req)
     }
 
-    pub fn header(&self, name: &str) -> Option<&str> {
+    pub fn header(&self, name: &str) -> Option<String> {
         for (key, value) in self.headers {
             if key == &name.as_bytes() {
                 return match str::from_utf8(value) {
-                    Ok(sv) => Some(sv),
+                    Ok(sv) => Some(sv.to_string()),
                     Err(e) => {
                         warn!("error decoding header {} as UTF-8: {}", name, e);
                         None
@@ -98,5 +113,19 @@ impl<'a> ServerRequest<'a> {
             }
         }
         None
+    }
+}
+
+impl<'a> fmt::Display for ServerRequest<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{{ action: {:?}, method: '{}', path: '{}', query: '{}', body_len: {} }}",
+            &self.action,
+            &self.method,
+            &self.path,
+            &self.query,
+            &self.body.len()
+        )
     }
 }

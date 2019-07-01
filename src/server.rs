@@ -12,7 +12,7 @@ use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
 use solicit::http::session::{DefaultSessionState, SessionState, Stream};
 use solicit::http::transport::TransportStream;
-use solicit::http::HttpScheme;
+use solicit::http::{HttpScheme, Response};
 
 use crate::error::Result;
 use crate::handlers::{Handler, NotFound};
@@ -146,7 +146,12 @@ impl Server {
                         Ok(req) => req,
                         Err(e) => {
                             warn!("error processing request: {}", e);
-                            return;
+                            responses.push(Response {
+                                headers: vec![(b":status".to_vec(), b"400".to_vec())],
+                                body: b"Bad Request\n".to_vec(),
+                                stream_id: stream.stream_id,
+                            });
+                            continue;
                         }
                     };
                     debug!("handle_stream: received request: {:?}", req.action);

@@ -32,15 +32,15 @@ pub struct Server {
 
 impl Server {
     /// new returns an initialized instance of Server
-    pub fn new(cert: &String, key: &String, socket: &String) -> Result<Server> {
+    pub fn new(cert: &str, key: &str, socket: &str) -> Result<Server> {
         env_logger::from_env(Env::default().default_filter_or("info")).init();
 
-        println!("zws HTTP server listening on {}. CTRL+C to stop.", &socket);
-        info!("Using certificate: {}, and key: {}.", &cert, &key);
+        println!("zws HTTP server listening on {}. CTRL+C to stop.", socket);
+        info!("Using certificate: {}, and key: {}.", cert, key);
 
         Ok(Server {
-            acceptor: Server::new_acceptor(&cert, &key)?,
-            listener: TcpListener::bind(&socket)?,
+            acceptor: Server::new_acceptor(cert, key)?,
+            listener: TcpListener::bind(socket)?,
             router: HashMap::<Action, Box<Handler>, BuildHasher>::default(),
             not_found: Box::new(NotFound {}),
         })
@@ -80,7 +80,7 @@ impl Server {
         };
 
         while path.pop() {
-            let action = Action::GET(PathBuf::from(&path));
+            let action = Action::GET(path.to_string_lossy().to_string());
             if let Some(h) = self.router.get(&action) {
                 return h;
             }
@@ -90,7 +90,7 @@ impl Server {
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
-    fn new_acceptor(cert: &String, key: &String) -> Result<Arc<SslAcceptor>> {
+    fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>> {
         let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
         acceptor.set_private_key_file(key, SslFiletype::PEM)?;
         acceptor.set_certificate_chain_file(cert)?;

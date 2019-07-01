@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::str;
 
 use solicit::http::session::DefaultStream;
@@ -9,7 +8,7 @@ use crate::error::{Result, ServerError};
 /// Action is an HTTP method and path combination.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Action {
-    GET(PathBuf),
+    GET(String),
 }
 
 /// ServerRequest represents a fully received request.
@@ -31,7 +30,7 @@ impl<'a> ServerRequest<'a> {
         };
 
         let mut req = ServerRequest {
-            action: Action::GET(PathBuf::new()),
+            action: Action::GET(String::new()),
             stream_id: stream.stream_id,
             headers: headers,
             body: &stream.body,
@@ -47,7 +46,7 @@ impl<'a> ServerRequest<'a> {
                             return Err(ServerError::BadRequest);
                         }
                     };
-                    Action::GET(PathBuf::from(path))
+                    Action::GET(String::from(path))
                 }
                 _ => {
                     warn!("error, unsupported request method");

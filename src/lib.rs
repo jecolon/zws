@@ -9,9 +9,11 @@ pub mod server;
 pub mod tls;
 
 pub use error::Result;
-pub use handlers::Handler;
+pub use handlers::{Handler, StaticFile};
 pub use request::{Action, ServerRequest};
 pub use server::Server;
+
+pub use solicit::http::Response;
 
 #[cfg(test)]
 mod tests {

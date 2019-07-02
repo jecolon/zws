@@ -35,8 +35,8 @@ impl FromStr for Action {
     }
 }
 
-/// ServerRequest represents a fully received request.
-pub struct ServerRequest<'a> {
+/// Request represents a fully received request.
+pub struct Request<'a> {
     pub action: Action,
     pub method: String,
     pub path: String,
@@ -46,8 +46,8 @@ pub struct ServerRequest<'a> {
     pub body: &'a [u8],
 }
 
-impl<'a> ServerRequest<'a> {
-    pub fn new(stream: &DefaultStream) -> Result<ServerRequest> {
+impl<'a> Request<'a> {
+    pub fn new(stream: &DefaultStream) -> Result<Request> {
         let headers = match stream.headers.as_ref() {
             Some(h) => h,
             None => {
@@ -56,7 +56,7 @@ impl<'a> ServerRequest<'a> {
             }
         };
 
-        let mut req = ServerRequest {
+        let mut req = Request {
             action: Action::GET(String::new()),
             method: "".to_string(),
             path: "".to_string(),
@@ -96,7 +96,7 @@ impl<'a> ServerRequest<'a> {
             }
         };
 
-        debug!("new: ServerRequest: {}", &req);
+        debug!("new: Request: {}", &req);
         Ok(req)
     }
 
@@ -116,7 +116,7 @@ impl<'a> ServerRequest<'a> {
     }
 }
 
-impl<'a> fmt::Display for ServerRequest<'a> {
+impl<'a> fmt::Display for Request<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,

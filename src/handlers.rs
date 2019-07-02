@@ -1,17 +1,18 @@
 use std::str;
 use std::sync::Arc;
 
-use solicit::http::Response;
-
 use crate::error::Result;
 use crate::mcache::{self, Cache, Entry};
-use crate::request::ServerRequest;
+use crate::request::Request;
+use crate::response::Response;
 
-// Handler is a type that produces a Response for a given ServerRequest.
+// Handler is a type that produces a Response for a given Request. The handle
+// method consumes the handler.
 pub trait Handler: Send + Sync {
-    fn handle(&self, req: ServerRequest) -> Response;
+    fn handle(&self, req: Request, resp: Response) -> Response;
 }
 
+#[derive(Clone)]
 pub struct StaticFile<'a> {
     cache: Option<Arc<Cache>>,
     webroot: &'a str,
@@ -50,7 +51,7 @@ impl<'a> StaticFile<'a> {
 }
 
 impl<'a> Handler for StaticFile<'a> {
-    fn handle(&self, req: ServerRequest) -> Response {
+    fn handle(&self, req: Request, _resp: Response) -> Response {
         debug!("FileHandler: path is {}", &req.path);
         let filename = format!("{}{}", self.webroot, &req.path);
         debug!("FileHandler: filename is {}", &filename);
@@ -63,20 +64,19 @@ impl<'a> Handler for StaticFile<'a> {
             None => mcache::file_response(self.webroot, &filename).0,
         };
 
-        response.stream_id = req.stream_id;
+        response.stream_id(req.stream_id);
         response
     }
 }
 
 /// NotFound is a handler that always returns a 404 Not Found Response.
+#[derive(Clone)]
 pub struct NotFound;
 
 impl Handler for NotFound {
-    fn handle(&self, req: ServerRequest) -> Response {
-        Response {
-            stream_id: req.stream_id,
-            headers: vec![(b":status".to_vec(), b"404".to_vec())],
-            body: b"Not Found\n".to_vec(),
-        }
+    fn handle(&self, _req: Request, mut resp: Response) -> Response {
+        resp.header(":status", "404");
+        resp.body("Not Found\n");
+        resp
     }
 }

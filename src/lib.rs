@@ -5,15 +5,15 @@ pub mod error;
 pub mod handlers;
 pub mod mcache;
 pub mod request;
+pub mod response;
 pub mod server;
 pub mod tls;
 
 pub use error::Result;
 pub use handlers::{Handler, StaticFile};
-pub use request::{Action, ServerRequest};
+pub use request::{Action, Request};
+pub use response::Response;
 pub use server::Server;
-
-pub use solicit::http::Response;
 
 #[cfg(test)]
 mod tests {

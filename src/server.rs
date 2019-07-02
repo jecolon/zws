@@ -12,11 +12,12 @@ use solicit::http::connection::{EndStream, HttpConnection, SendStatus};
 use solicit::http::server::ServerConnection;
 use solicit::http::session::{DefaultSessionState, SessionState, Stream};
 use solicit::http::transport::TransportStream;
-use solicit::http::{HttpScheme, Response};
+use solicit::http::{self, HttpScheme};
 
 use crate::error::Result;
 use crate::handlers::{Handler, NotFound};
-use crate::request::{Action, ServerRequest};
+use crate::request::{Action, Request};
+use crate::response::Response;
 use crate::tls::Wrapper;
 
 /// BuildHasher lets us use SeaHasher with HashMap.
@@ -72,7 +73,7 @@ impl Server {
     /// handler returns a handler for a given Action, or file_handler if none found.
     fn handler(&self, action: &Action) -> &Box<Handler> {
         if let Some(h) = self.router.get(&action) {
-            return h;
+            return h.clone();
         }
 
         let mut path = match action {
@@ -82,7 +83,7 @@ impl Server {
         while path.pop() {
             let action = Action::GET(path.to_string_lossy().to_string());
             if let Some(h) = self.router.get(&action) {
-                return h;
+                return h.clone();
             }
         }
 
@@ -142,24 +143,25 @@ impl Server {
             let mut responses = Vec::new();
             for stream in conn.state.iter() {
                 if stream.is_closed_remote() {
-                    let req = match ServerRequest::new(&stream) {
+                    let req = match Request::new(&stream) {
                         Ok(req) => req,
                         Err(e) => {
                             warn!("error processing request: {}", e);
-                            responses.push(Response {
-                                headers: vec![(b":status".to_vec(), b"400".to_vec())],
-                                body: b"Bad Request\n".to_vec(),
-                                stream_id: stream.stream_id,
-                            });
+                            let mut resp = Response::new(stream.stream_id);
+                            resp.header(":status", "400");
+                            resp.body("Bad Request\n");
+                            responses.push(resp);
                             continue;
                         }
                     };
                     debug!("handle_stream: received request: {:?}", req.action);
-                    responses.push(self.handler(&req.action).handle(req));
+                    let resp = Response::new(stream.stream_id);
+                    responses.push(self.handler(&req.action).handle(req, resp));
                 }
             }
 
-            for response in responses {
+            for resp in responses {
+                let response: http::Response = resp.into();
                 if let Err(e) =
                     conn.start_response(response.headers, response.stream_id, EndStream::No)
                 {

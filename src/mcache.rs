@@ -7,7 +7,8 @@ use std::{io, str, thread, time};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use seahash::SeaHasher;
-use solicit::http::Response;
+
+use crate::response::Response;
 
 /// Entry is a cache entry that can fetch its Response lazily.
 pub type Entry = Arc<(Mutex<bool>, Condvar, RwLock<Option<Response>>)>;
@@ -79,22 +80,16 @@ pub fn file_response(webroot: &str, filename: &str) -> (Response, bool) {
     let path = Path::new(&filename);
     if path.is_dir() {
         let webroot_len = webroot.len() + 1;
-        let redirect = format!("{}/index.html", &filename[webroot_len..]).into_bytes();
+        let redirect = format!("{}/index.html", &filename[webroot_len..]);
         debug!(
             "file_response: redirecting dir request without trailing slash to {}",
-            str::from_utf8(&redirect).unwrap()
+            &redirect
         );
-        return (
-            Response {
-                headers: vec![
-                    (b":status".to_vec(), b"307".to_vec()),
-                    (b"location".to_vec(), redirect),
-                ],
-                body: b"Moved Termporarily\n".to_vec(),
-                stream_id: 0,
-            },
-            true,
-        );
+        let mut resp = Response::new(0);
+        resp.header(":status", "307");
+        resp.header("location", &redirect);
+        resp.body("Moved Temporarily\n");
+        return (resp, true);
     }
 
     let buf = match fs::read(path) {
@@ -102,39 +97,27 @@ pub fn file_response(webroot: &str, filename: &str) -> (Response, bool) {
         Err(e) => {
             eprintln!("error reading file {}: {}", filename, e);
             if io::ErrorKind::NotFound == e.kind() {
-                return (
-                    Response {
-                        headers: vec![(b":status".to_vec(), b"404".to_vec())],
-                        body: b"Not Found\n".to_vec(),
-                        stream_id: 0,
-                    },
-                    true,
-                );
+                let mut resp = Response::new(0);
+                resp.header(":status", "404");
+                resp.body("Not Found\n");
+                return (resp, true);
             }
-            return (
-                Response {
-                    headers: vec![(b":status".to_vec(), b"500".to_vec())],
-                    body: b"Unable to read file\n".to_vec(),
-                    stream_id: 0,
-                },
-                true,
-            );
+
+            let mut resp = Response::new(0);
+            resp.header(":status", "500");
+            resp.body("Unable to read file\n");
+            return (resp, true);
         }
     };
 
     let ctype = get_ctype(filename);
 
-    (
-        Response {
-            headers: vec![
-                (b":status".to_vec(), b"200".to_vec()),
-                (b"content-type".to_vec(), ctype.as_bytes().to_vec()),
-            ],
-            body: buf,
-            stream_id: 0,
-        },
-        false,
-    )
+    let mut resp = Response::new(0);
+    resp.header(":status", "200");
+    resp.header("content-type", ctype);
+    resp.body(buf);
+
+    (resp, false)
 }
 
 /// get_ctype produces a MIME content type string based on filename extension.

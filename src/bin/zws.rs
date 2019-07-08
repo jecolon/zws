@@ -4,8 +4,12 @@ use zws::{Handler, Request, Response, Server};
 fn main() -> zws::Result<()> {
     Server::new("tls/dev/cert.pem", "tls/dev/key.pem", "127.0.0.1:8443")?
         .add_handler("GET /hello", StringHandler::new("Hello"))?
-        .add_handler("GET /hello/world", StringHandler::new("World"))?
         .add_handler("GET /", StaticFile::new("webroot", true)?)?
+        .add_handler_func("GET /hello/world", |_req, mut resp| {
+            resp.header(":status", "200");
+            resp.body("Hello World!");
+            resp
+        })?
         .run()
 }
 

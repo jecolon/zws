@@ -15,7 +15,7 @@ use solicit::http::transport::TransportStream;
 use solicit::http::{self, HttpScheme};
 
 use crate::error::Result;
-use crate::handlers::{Handler, NotFound};
+use crate::handlers::{Handler, HandlerFunc, NotFound};
 use crate::request::{Action, Request};
 use crate::response::Response;
 use crate::tls::Wrapper;
@@ -25,7 +25,7 @@ type BuildHasher = BuildHasherDefault<SeaHasher>;
 
 /// Server is a simple HTT/2 server
 pub struct Server {
-    acceptor: Arc<SslAcceptor>,
+    acceptor: SslAcceptor,
     listener: TcpListener,
     router: HashMap<Action, Box<Handler>, BuildHasher>,
     not_found: Box<Handler>,
@@ -50,6 +50,16 @@ impl Server {
     /// add_handler registers a handler for a given Action.
     pub fn add_handler(mut self, action: &str, handler: Box<Handler>) -> Result<Self> {
         self.router.insert(action.parse()?, handler);
+        Ok(self)
+    }
+
+    /// add_handler_func registers a closure as a handler for a given Action.
+    pub fn add_handler_func<F>(mut self, action: &str, func: F) -> Result<Self>
+    where
+        F: FnOnce(Request, Response) -> Response,
+        F: Clone + Send + Sync + 'static,
+    {
+        self.router.insert(action.parse()?, HandlerFunc::new(func));
         Ok(self)
     }
 
@@ -91,7 +101,7 @@ impl Server {
     }
 
     /// new_acceptor creates a new TLS acceptor with the given certificate and key.
-    fn new_acceptor(cert: &str, key: &str) -> Result<Arc<SslAcceptor>> {
+    fn new_acceptor(cert: &str, key: &str) -> Result<SslAcceptor> {
         let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
         acceptor.set_private_key_file(key, SslFiletype::PEM)?;
         acceptor.set_certificate_chain_file(cert)?;
@@ -106,13 +116,12 @@ impl Server {
             }
         });
 
-        Ok(Arc::new(acceptor.build()))
+        Ok(acceptor.build())
     }
 
     /// handle_stream processess an HTTP/2 TCP/TLS streaml
     fn handle_stream(&self, stream: TcpStream) {
-        let acceptor = Arc::clone(&self.acceptor);
-        let stream = match acceptor.accept(stream) {
+        let stream = match self.acceptor.accept(stream) {
             Ok(stream) => stream,
             Err(e) => {
                 warn!("error in TLS accept: {}", e);

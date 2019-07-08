@@ -200,3 +200,32 @@ impl Handler for NotFound {
         resp
     }
 }
+
+pub struct HandlerFunc<F>
+where
+    F: FnOnce(Request, Response) -> Response,
+    F: Clone + Send + Sync + 'static,
+{
+    func: F,
+}
+
+impl<F> HandlerFunc<F>
+where
+    F: FnOnce(Request, Response) -> Response,
+    F: Clone + Send + Sync + 'static,
+{
+    pub fn new(func: F) -> Box<HandlerFunc<F>> {
+        Box::new(HandlerFunc { func })
+    }
+}
+
+impl<F> Handler for HandlerFunc<F>
+where
+    F: FnOnce(Request, Response) -> Response,
+    F: Clone + Send + Sync + 'static,
+{
+    fn handle(&self, req: Request, resp: Response) -> Response {
+        let clone = self.func.clone();
+        clone(req, resp)
+    }
+}

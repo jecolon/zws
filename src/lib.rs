@@ -3,7 +3,6 @@ extern crate log;
 
 pub mod error;
 pub mod handlers;
-pub mod mcache;
 pub mod request;
 pub mod response;
 pub mod server;

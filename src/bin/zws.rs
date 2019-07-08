@@ -9,7 +9,6 @@ fn main() -> zws::Result<()> {
         .run()
 }
 
-#[derive(Clone)]
 struct StringHandler {
     body: String,
 }

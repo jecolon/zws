@@ -1,14 +1,19 @@
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::path::Path;
 use std::str;
 use std::sync::{mpsc, Arc, RwLock};
 use std::{fs, io, thread, time};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use seahash::SeaHasher;
 
 use crate::error::Result;
 use crate::request::Request;
 use crate::response::Response;
+
+/// BuildHasher lets us use SeaHasher with HashMap.
+type BuildHasher = BuildHasherDefault<SeaHasher>;
 
 // Handler is a type that produces a Response for a given Request. The handle
 // method consumes the handler.
@@ -16,9 +21,8 @@ pub trait Handler: Send + Sync {
     fn handle(&self, req: Request, resp: Response) -> Response;
 }
 
-type Cache = Arc<RwLock<HashMap<String, Response>>>;
+type Cache = Arc<RwLock<HashMap<String, Response, BuildHasher>>>;
 
-#[derive(Clone)]
 pub struct StaticFile {
     cache: Option<Cache>,
     webroot: String,
@@ -32,7 +36,9 @@ impl StaticFile {
         };
 
         if caching {
-            let cache = Arc::new(RwLock::new(HashMap::new()));
+            let cache = Arc::new(RwLock::new(
+                HashMap::<String, Response, BuildHasher>::default(),
+            ));
             let clone = Arc::clone(&cache);
             let wr = sf.webroot.clone();
             sf.cache = Some(cache);
@@ -185,7 +191,6 @@ fn get_ctype(filename: &str) -> &str {
 }
 
 /// NotFound is a handler that always returns a 404 Not Found Response.
-#[derive(Clone)]
 pub struct NotFound;
 
 impl Handler for NotFound {

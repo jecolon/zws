@@ -16,7 +16,7 @@ use solicit::http::{self, HttpScheme};
 
 use crate::error::Result;
 use crate::handlers::{Handler, HandlerFunc, NotFound};
-use crate::request::{Action, Request};
+use crate::request::{Action, Method, Request};
 use crate::response::Response;
 use crate::tls::Wrapper;
 
@@ -49,7 +49,9 @@ impl Server {
 
     /// add_handler registers a handler for a given Action.
     pub fn add_handler(mut self, action: &str, handler: Box<Handler>) -> Result<Self> {
-        self.router.insert(action.parse()?, handler);
+        if let Some(_) = self.router.insert(action.parse()?, handler) {
+            warn!("add_handler: overwriting handler for action: {}", action);
+        }
         Ok(self)
     }
 
@@ -59,7 +61,12 @@ impl Server {
         F: FnOnce(Request, Response) -> Response,
         F: Clone + Send + Sync + 'static,
     {
-        self.router.insert(action.parse()?, HandlerFunc::new(func));
+        if let Some(_) = self.router.insert(action.parse()?, HandlerFunc::new(func)) {
+            warn!(
+                "add_handler_func: overwriting handler func for action: {}",
+                action
+            );
+        }
         Ok(self)
     }
 
@@ -86,12 +93,14 @@ impl Server {
             return h.clone();
         }
 
-        let mut path = match action {
-            Action::GET(path) => PathBuf::from(path),
-        };
+        let mut path = PathBuf::from(&action.path);
 
         while path.pop() {
-            let action = Action::GET(path.to_string_lossy().to_string());
+            let action = Action {
+                method: Method::GET,
+                path: path.to_string_lossy().to_string(),
+                params: None,
+            };
             if let Some(h) = self.router.get(&action) {
                 return h.clone();
             }
@@ -152,7 +161,8 @@ impl Server {
             let mut responses = Vec::new();
             for stream in conn.state.iter() {
                 if stream.is_closed_remote() {
-                    let req = match Request::new(&stream) {
+                    let actions = self.router.keys().cloned().collect();
+                    let req = match Request::new(&stream, &actions) {
                         Ok(req) => req,
                         Err(e) => {
                             warn!("error processing request: {}", e);
@@ -163,7 +173,7 @@ impl Server {
                             continue;
                         }
                     };
-                    debug!("handle_stream: received request: {:?}", req.action);
+                    debug!("handle_stream: received request: {}", req);
                     let resp = Response::new(stream.stream_id);
                     responses.push(self.handler(&req.action).handle(req, resp));
                 }

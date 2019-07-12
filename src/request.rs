@@ -208,6 +208,19 @@ impl<'a> Request<'a> {
         Ok(req)
     }
 
+    pub fn has_params(&self) -> bool {
+        self.params != None
+    }
+
+    pub fn param(&self, name: &str) -> &str {
+        if let Some(params) = &self.params {
+            if let Some(value) = params.get(name) {
+                return &value;
+            }
+        }
+        ""
+    }
+
     pub fn header(&self, name: &str) -> Option<String> {
         for (key, value) in self.headers {
             if key == &name.as_bytes() {

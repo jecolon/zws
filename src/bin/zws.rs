@@ -7,10 +7,10 @@ fn main() -> zws::Result<()> {
         .add_handler("GET /", StaticFile::new("webroot", true)?)?
         .add_handler_func("GET /user/:fname/:lname/:age", |req, mut resp| {
             resp.header(":status", "200");
-            if let Some(params) = req.params {
-                let fname = params.get("fname").unwrap();
-                let lname = params.get("lname").unwrap();
-                let age = params.get("age").unwrap();
+            if req.has_params() {
+                let fname = req.param("fname");
+                let lname = req.param("lname");
+                let age = req.param("age");
                 resp.body(format!(
                     "Hello {} {}. You are {} years old!",
                     fname, lname, age

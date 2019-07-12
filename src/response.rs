@@ -15,8 +15,14 @@ impl Response {
     pub fn new(id: http::StreamId) -> Response {
         Response {
             stream_id: id,
-            pseudo_headers: HashMap::new(),
-            headers: HashMap::new(),
+            pseudo_headers: [(":status".to_string(), "200".to_string())]
+                .iter()
+                .cloned()
+                .collect(),
+            headers: [("server".to_string(), "zws".to_string())]
+                .iter()
+                .cloned()
+                .collect(),
             body: Vec::new(),
         }
     }
@@ -25,7 +31,7 @@ impl Response {
         self.stream_id = id;
     }
 
-    pub fn header(&mut self, key: &str, value: &str) {
+    pub fn add_header(&mut self, key: &str, value: &str) {
         if key.starts_with(':') {
             self.pseudo_headers
                 .insert(key.to_string(), value.to_string());
@@ -34,7 +40,7 @@ impl Response {
         }
     }
 
-    pub fn body<T: Into<Vec<u8>>>(&mut self, b: T) {
+    pub fn set_body<T: Into<Vec<u8>>>(&mut self, b: T) {
         self.body = b.into();
     }
 }

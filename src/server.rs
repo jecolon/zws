@@ -167,8 +167,8 @@ impl Server {
                         Err(e) => {
                             warn!("error processing request: {}", e);
                             let mut resp = Response::new(stream.stream_id);
-                            resp.header(":status", "400");
-                            resp.body("Bad Request\n");
+                            resp.add_header(":status", "400");
+                            resp.set_body("Bad Request\n");
                             responses.push(resp);
                             continue;
                         }

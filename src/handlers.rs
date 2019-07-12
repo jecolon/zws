@@ -29,23 +29,24 @@ pub struct StaticFile {
 }
 
 impl StaticFile {
-    pub fn new(webroot: &str, caching: bool) -> Result<Box<StaticFile>> {
-        let mut sf = StaticFile {
+    pub fn new(webroot: &str) -> Box<StaticFile> {
+        Box::new(StaticFile {
             cache: None,
             webroot: webroot.to_string(),
-        };
+        })
+    }
 
-        if caching {
-            let cache = Arc::new(RwLock::new(
-                HashMap::<String, Response, BuildHasher>::default(),
-            ));
-            let clone = Arc::clone(&cache);
-            let wr = sf.webroot.clone();
-            sf.cache = Some(cache);
-            thread::spawn(|| watch_fs(clone, wr));
-        }
+    pub fn with_cache(webroot: &'static str) -> Result<Box<StaticFile>> {
+        let cache = Arc::new(RwLock::new(
+            HashMap::<String, Response, BuildHasher>::default(),
+        ));
+        let clone = Arc::clone(&cache);
+        thread::spawn(move || watch_fs(clone, webroot));
 
-        Ok(Box::new(sf))
+        Ok(Box::new(StaticFile {
+            cache: Some(cache),
+            webroot: webroot.to_string(),
+        }))
     }
 }
 
@@ -81,7 +82,7 @@ impl Handler for StaticFile {
 }
 
 /// watch is a file system event processor that maintains the cache up-to-date.
-fn watch_fs(cache: Cache, webroot: String) -> notify::Result<()> {
+fn watch_fs(cache: Cache, webroot: &str) -> notify::Result<()> {
     debug!("watch: watching FS at {}", &webroot);
     // Create a channel to receive the events.
     let (tx, rx) = mpsc::channel();
@@ -133,9 +134,9 @@ fn file_response(webroot: &str, filename: &str) -> (Response, bool) {
             &redirect
         );
         let mut resp = Response::new(0);
-        resp.header(":status", "307");
-        resp.header("location", &redirect);
-        resp.body("Moved Temporarily\n");
+        resp.add_header(":status", "307");
+        resp.add_header("location", &redirect);
+        resp.set_body("Moved Temporarily\n");
         return (resp, true);
     }
 
@@ -145,14 +146,14 @@ fn file_response(webroot: &str, filename: &str) -> (Response, bool) {
             eprintln!("error reading file {}: {}", filename, e);
             if io::ErrorKind::NotFound == e.kind() {
                 let mut resp = Response::new(0);
-                resp.header(":status", "404");
-                resp.body("Not Found\n");
+                resp.add_header(":status", "404");
+                resp.set_body("Not Found\n");
                 return (resp, true);
             }
 
             let mut resp = Response::new(0);
-            resp.header(":status", "500");
-            resp.body("Unable to read file\n");
+            resp.add_header(":status", "500");
+            resp.set_body("Unable to read file\n");
             return (resp, true);
         }
     };
@@ -160,9 +161,8 @@ fn file_response(webroot: &str, filename: &str) -> (Response, bool) {
     let ctype = get_ctype(filename);
 
     let mut resp = Response::new(0);
-    resp.header(":status", "200");
-    resp.header("content-type", ctype);
-    resp.body(buf);
+    resp.add_header("content-type", ctype);
+    resp.set_body(buf);
 
     (resp, false)
 }
@@ -195,8 +195,8 @@ pub struct NotFound;
 
 impl Handler for NotFound {
     fn handle(&self, _req: Request, mut resp: Response) -> Response {
-        resp.header(":status", "404");
-        resp.body("Not Found\n");
+        resp.add_header(":status", "404");
+        resp.set_body("Not Found\n");
         resp
     }
 }

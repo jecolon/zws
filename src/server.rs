@@ -153,7 +153,7 @@ impl Server {
         let mut conn: ServerConnection<Wrapper, Wrapper> =
             ServerConnection::with_connection(conn, DefaultSessionState::new());
         if let Err(e) = conn.init() {
-            error!("error binding to TCP socket: {}", e);
+            error!("error initializing ServerConnection: {}", e);
             return;
         };
 

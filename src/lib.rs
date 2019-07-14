@@ -7,6 +7,7 @@ pub mod request;
 pub mod response;
 pub mod server;
 pub mod tls;
+pub mod workers;
 
 pub use error::Result;
 pub use handlers::{Handler, StaticFile};

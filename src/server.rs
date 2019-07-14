@@ -3,7 +3,6 @@ use std::hash::BuildHasherDefault;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::thread;
 
 use env_logger::Env;
 use openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
@@ -19,6 +18,7 @@ use crate::handlers::{Handler, HandlerFunc, NotFound};
 use crate::request::{Action, Method, Request};
 use crate::response::Response;
 use crate::tls::Wrapper;
+use crate::workers;
 
 /// BuildHasher lets us use SeaHasher with HashMap.
 type BuildHasher = BuildHasherDefault<SeaHasher>;
@@ -76,11 +76,13 @@ impl Server {
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
     pub fn run(self) -> Result<()> {
         let srv = Arc::new(self);
+        let pool = workers::Pool::new(8);
+
         for stream in srv.listener.incoming() {
             match stream {
                 Ok(stream) => {
                     let clone = Arc::clone(&srv);
-                    thread::spawn(move || clone.handle_stream(stream));
+                    pool.execute(move || clone.handle_stream(stream));
                 }
                 Err(e) => {
                     warn!("error in TCP accept: {}", e);

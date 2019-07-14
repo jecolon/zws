@@ -17,7 +17,7 @@ type BuildHasher = BuildHasherDefault<SeaHasher>;
 
 // Handler is a type that produces a Response for a given Request. The handle
 // method consumes the handler.
-pub trait Handler: Send + Sync {
+pub trait Handler: Send + Sync + 'static {
     fn handle(&self, req: Request, resp: Response) -> Response;
 }
 
@@ -29,24 +29,24 @@ pub struct StaticFile {
 }
 
 impl StaticFile {
-    pub fn new(webroot: &str) -> Box<StaticFile> {
-        Box::new(StaticFile {
+    pub fn new(webroot: &str) -> StaticFile {
+        StaticFile {
             cache: None,
             webroot: webroot.to_string(),
-        })
+        }
     }
 
-    pub fn with_cache(webroot: &'static str) -> Result<Box<StaticFile>> {
+    pub fn with_cache(webroot: &'static str) -> Result<StaticFile> {
         let cache = Arc::new(RwLock::new(
             HashMap::<String, Response, BuildHasher>::default(),
         ));
         let clone = Arc::clone(&cache);
         thread::spawn(move || watch_fs(clone, webroot));
 
-        Ok(Box::new(StaticFile {
+        Ok(StaticFile {
             cache: Some(cache),
             webroot: webroot.to_string(),
-        }))
+        })
     }
 }
 
@@ -214,8 +214,8 @@ where
     F: FnOnce(Request, Response) -> Response,
     F: Clone + Send + Sync + 'static,
 {
-    pub fn new(func: F) -> Box<HandlerFunc<F>> {
-        Box::new(HandlerFunc { func })
+    pub fn new(func: F) -> HandlerFunc<F> {
+        HandlerFunc { func }
     }
 }
 

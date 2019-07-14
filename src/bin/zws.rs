@@ -29,10 +29,10 @@ struct StringHandler {
 }
 
 impl StringHandler {
-    fn new(s: &str) -> Box<StringHandler> {
-        Box::new(StringHandler {
+    fn new(s: &str) -> StringHandler {
+        StringHandler {
             body: s.to_string(),
-        })
+        }
     }
 }
 

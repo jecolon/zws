@@ -29,21 +29,27 @@ pub struct Server {
     listener: TcpListener,
     router: HashMap<Action, Box<Handler>, BuildHasher>,
     not_found: Box<Handler>,
+    threads: usize,
 }
 
 impl Server {
     /// new returns an initialized instance of Server
-    pub fn new(cert: &str, key: &str, socket: &str) -> Result<Server> {
+    pub fn new(cert: &str, key: &str, socket: &str, threads: usize) -> Result<Server> {
         env_logger::from_env(Env::default().default_filter_or("info")).init();
 
         println!("zws HTTP server listening on {}. CTRL+C to stop.", socket);
         info!("Using certificate: {}, and key: {}.", cert, key);
+        info!(
+            "Using {} threads for worker pool request handling.",
+            threads
+        );
 
         Ok(Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
             router: HashMap::<Action, Box<Handler>, BuildHasher>::default(),
             not_found: Box::new(NotFound {}),
+            threads,
         })
     }
 
@@ -76,7 +82,7 @@ impl Server {
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
     pub fn run(self) -> Result<()> {
         let srv = Arc::new(self);
-        let pool = workers::Pool::new(8);
+        let pool = workers::Pool::new(srv.threads);
 
         for stream in srv.listener.incoming() {
             match stream {

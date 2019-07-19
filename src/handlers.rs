@@ -36,17 +36,17 @@ impl StaticFile {
         }
     }
 
-    pub fn with_cache(webroot: String) -> Result<StaticFile> {
+    pub fn with_cache(webroot: &str) -> Result<StaticFile> {
         let cache = Arc::new(RwLock::new(
             HashMap::<String, Response, BuildHasher>::default(),
         ));
         let cache_clone = Arc::clone(&cache);
-        let webroot_clone = webroot.clone();
-        thread::spawn(move || watch_fs(cache_clone, webroot_clone));
+        let wr = webroot.to_string();
+        thread::spawn(move || watch_fs(cache_clone, &wr));
 
         Ok(StaticFile {
             cache: Some(cache),
-            webroot: webroot,
+            webroot: webroot.to_string(),
         })
     }
 }
@@ -83,7 +83,7 @@ impl Handler for StaticFile {
 }
 
 /// watch is a file system event processor that maintains the cache up-to-date.
-fn watch_fs(cache: Cache, webroot: String) -> notify::Result<()> {
+fn watch_fs(cache: Cache, webroot: &str) -> notify::Result<()> {
     debug!("watch: watching FS at {}", &webroot);
     // Create a channel to receive the events.
     let (tx, rx) = mpsc::channel();

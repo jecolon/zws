@@ -41,18 +41,17 @@ Options:
         threads = num_cpus::get();
     }
 
-    let webroot = args.get_str("--webroot").to_string();
+    let webroot = args.get_str("--webroot");
 
-    Server::new(
-        args.get_str("--cert"),
-        args.get_str("--key"),
-        args.get_str("--socket"),
-        threads,
-    )?
-    .add_handler("GET /hello", StringHandler::new("Hello"))?
-    .add_handler("GET /", StaticFile::with_cache(webroot)?)?
-    .add_handler_func("GET /user/:fname/:lname/:age", greeter_func)?
-    .run()
+    Server::builder()
+        .tls(args.get_str("--cert"), args.get_str("--key"))
+        .socket(args.get_str("--socket"))
+        .threads(threads)
+        .handler("GET /hello", StringHandler::new("Hello"))?
+        .handler("GET /", StaticFile::with_cache(webroot)?)?
+        .handler_func("GET /user/:fname/:lname/:age", greeter_func)?
+        .build()?
+        .run()
 }
 
 fn greeter_func(req: Request, mut resp: Response) -> Response {

@@ -23,6 +23,72 @@ use crate::workers;
 /// BuildHasher lets us use SeaHasher with HashMap.
 type BuildHasher = BuildHasherDefault<SeaHasher>;
 
+/// Builder is the Server builder.
+pub struct Builder {
+    cert: String,
+    key: String,
+    router: HashMap<Action, Box<Handler>, BuildHasher>,
+    socket: String,
+    threads: usize,
+}
+
+impl Builder {
+    /// new returns an initialized Server Builder.
+    pub fn new() -> Builder {
+        Builder {
+            cert: "tls/dev/cert.pem".to_string(),
+            key: "tls/dev/key.pem".to_string(),
+            router: HashMap::<Action, Box<Handler>, BuildHasher>::default(),
+            socket: "127.0.0.1:8443".to_string(),
+            threads: 0,
+        }
+    }
+
+    /// tls sets the certificate and key files.
+    pub fn tls(mut self, cert: &str, key: &str) -> Self {
+        self.cert = cert.to_string();
+        self.key = key.to_string();
+        self
+    }
+
+    /// socket sets the TcP socket to listen on.
+    pub fn socket(mut self, socket: &str) -> Self {
+        self.socket = socket.to_string();
+        self
+    }
+
+    /// threads sets the number of worker pool threads.
+    pub fn threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
+    }
+
+    /// handler registers a handler for a given Action.
+    pub fn handler<H: Handler>(mut self, action: &str, handler: H) -> Result<Self> {
+        self.router.insert(action.parse()?, Box::new(handler));
+        Ok(self)
+    }
+
+    /// handler_func registers a closure as a handler for a given Action.
+    pub fn handler_func<F>(mut self, action: &str, func: F) -> Result<Self>
+    where
+        F: FnOnce(Request, Response) -> Response,
+        F: Clone + Send + Sync + 'static,
+    {
+        self.router
+            .insert(action.parse()?, Box::new(HandlerFunc::new(func)));
+        Ok(self)
+    }
+
+    pub fn build(self) -> Result<Server> {
+        let mut server = Server::new(&self.cert, &self.key, &self.socket, self.threads)?;
+        for (key, value) in self.router {
+            server.router.insert(key, value);
+        }
+        Ok(server)
+    }
+}
+
 /// Server is a simple HTT/2 server
 pub struct Server {
     acceptor: SslAcceptor,
@@ -33,6 +99,11 @@ pub struct Server {
 }
 
 impl Server {
+    /// builder prepares a Server Builder.
+    pub fn builder() -> Builder {
+        Builder::new()
+    }
+
     /// new returns an initialized instance of Server
     pub fn new(cert: &str, key: &str, socket: &str, threads: usize) -> Result<Server> {
         env_logger::from_env(Env::default().default_filter_or("info")).init();
@@ -54,7 +125,7 @@ impl Server {
     }
 
     /// add_handler registers a handler for a given Action.
-    pub fn add_handler<H: Handler>(mut self, action: &str, handler: H) -> Result<Self> {
+    pub fn add_handler<H: Handler>(&mut self, action: &str, handler: H) -> Result<&mut Self> {
         if let Some(_) = self.router.insert(action.parse()?, Box::new(handler)) {
             warn!("add_handler: overwriting handler for action: {}", action);
         }
@@ -62,7 +133,7 @@ impl Server {
     }
 
     /// add_handler_func registers a closure as a handler for a given Action.
-    pub fn add_handler_func<F>(mut self, action: &str, func: F) -> Result<Self>
+    pub fn add_handler_func<F>(&mut self, action: &str, func: F) -> Result<&mut Self>
     where
         F: FnOnce(Request, Response) -> Response,
         F: Clone + Send + Sync + 'static,

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 
 use env_logger::Env;
 use openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
@@ -15,7 +16,7 @@ use solicit::http::{self, HttpScheme};
 
 use crate::error::Result;
 use crate::handlers::{Handler, HandlerFunc, NotFound};
-use crate::request::{Action, Method, Request};
+use crate::request::{Action, Request};
 use crate::response::Response;
 use crate::tls::Wrapper;
 use crate::workers;
@@ -89,6 +90,11 @@ impl Builder {
     }
 }
 
+enum Event {
+    Incoming(TcpStream),
+    Shutdown,
+}
+
 /// Server is a simple HTT/2 server
 pub struct Server {
     acceptor: SslAcceptor,
@@ -152,25 +158,58 @@ impl Server {
 
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
     pub fn run(self) -> Result<()> {
-        let srv = Arc::new(self);
-        let pool = workers::Pool::new(srv.threads);
+        // Graceful shutdown via CTRL+C
+        let (evt_tx, evt_rx) = mpsc::channel();
+        let evt_tx = Arc::new(Mutex::new(evt_tx));
+        let evt_tx_clone_1 = Arc::clone(&evt_tx);
 
-        for stream in srv.listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let clone = Arc::clone(&srv);
-                    pool.execute(move || clone.handle_stream(stream));
-                }
-                Err(e) => {
-                    warn!("error in TCP accept: {}", e);
+        ctrlc::set_handler(move || {
+            info!("CTRL+C received! Shutting down...");
+            evt_tx_clone_1
+                .lock()
+                .unwrap()
+                .send(Event::Shutdown)
+                .unwrap();
+        })
+        .unwrap();
+
+        let srv = Arc::new(self);
+        let srv_clone_1 = Arc::clone(&srv);
+        let evt_tx_clone_2 = Arc::clone(&evt_tx);
+
+        thread::spawn(move || {
+            for stream in srv_clone_1.listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        evt_tx_clone_2
+                            .lock()
+                            .unwrap()
+                            .send(Event::Incoming(stream))
+                            .unwrap();
+                    }
+                    Err(e) => {
+                        warn!("error in TCP accept: {}", e);
+                    }
                 }
             }
+        });
+
+        let pool = workers::Pool::new(srv.threads);
+        for event in evt_rx {
+            match event {
+                Event::Incoming(stream) => {
+                    let srv_clone_2 = Arc::clone(&srv);
+                    pool.execute(move || srv_clone_2.handle_stream(stream));
+                }
+                Event::Shutdown => break,
+            }
         }
+
         Ok(())
     }
 
     /// handler returns a handler for a given Action, or file_handler if none found.
-    fn handler(&self, action: &Action) -> &Box<Handler> {
+    fn handler(&self, action: &mut Action) -> &Box<Handler> {
         if let Some(h) = self.router.get(&action) {
             return h.clone();
         }
@@ -178,11 +217,7 @@ impl Server {
         let mut path = PathBuf::from(&action.path);
 
         while path.pop() {
-            let action = Action {
-                method: Method::GET,
-                path: path.to_string_lossy().to_string(),
-                params: None,
-            };
+            action.path = path.to_string_lossy().to_string();
             if let Some(h) = self.router.get(&action) {
                 return h.clone();
             }
@@ -244,7 +279,7 @@ impl Server {
             for stream in conn.state.iter() {
                 if stream.is_closed_remote() {
                     let actions = self.router.keys().cloned().collect();
-                    let req = match Request::new(&stream, &actions) {
+                    let mut req = match Request::new(&stream, &actions) {
                         Ok(req) => req,
                         Err(e) => {
                             warn!("error processing request: {}", e);
@@ -257,7 +292,7 @@ impl Server {
                     };
                     debug!("handle_stream: received request: {}", req);
                     let resp = Response::new(stream.stream_id);
-                    responses.push(self.handler(&req.action).handle(req, resp));
+                    responses.push(self.handler(&mut req.action).handle(req, resp));
                 }
             }
 

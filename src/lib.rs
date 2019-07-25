@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+extern crate ctrlc;
 
 pub mod error;
 pub mod handlers;

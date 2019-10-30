@@ -131,7 +131,7 @@ impl Server {
     }
 
     /// add_handler registers a handler for a given Action.
-    pub fn add_handler<H: Handler>(&mut self, action: &str, handler: H) -> Result<&mut Self> {
+    pub fn add_handler<H: Handler>(mut self, action: &str, handler: H) -> Result<Self> {
         if let Some(_) = self.router.insert(action.parse()?, Box::new(handler)) {
             warn!("add_handler: overwriting handler for action: {}", action);
         }
@@ -139,7 +139,7 @@ impl Server {
     }
 
     /// add_handler_func registers a closure as a handler for a given Action.
-    pub fn add_handler_func<F>(&mut self, action: &str, func: F) -> Result<&mut Self>
+    pub fn add_handler_func<F>(mut self, action: &str, func: F) -> Result<Self>
     where
         F: FnOnce(Request, Response) -> Response,
         F: Clone + Send + Sync + 'static,

@@ -86,7 +86,7 @@ impl FromStr for Action {
                 params: params,
             }),
             _ => Err(ServerError::ParseAction(format!(
-                "Request action verb unknown: {}",
+                "Request action verb not implemented: {}",
                 parts[0]
             ))),
         }

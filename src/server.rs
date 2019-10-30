@@ -28,7 +28,7 @@ type BuildHasher = BuildHasherDefault<SeaHasher>;
 pub struct Builder {
     cert: String,
     key: String,
-    router: HashMap<Action, Box<Handler>, BuildHasher>,
+    router: HashMap<Action, Box<dyn Handler>, BuildHasher>,
     socket: String,
     threads: usize,
 }
@@ -39,7 +39,7 @@ impl Builder {
         Builder {
             cert: "tls/dev/cert.pem".to_string(),
             key: "tls/dev/key.pem".to_string(),
-            router: HashMap::<Action, Box<Handler>, BuildHasher>::default(),
+            router: HashMap::<Action, Box<dyn Handler>, BuildHasher>::default(),
             socket: "127.0.0.1:8443".to_string(),
             threads: 0,
         }
@@ -99,8 +99,8 @@ enum Event {
 pub struct Server {
     acceptor: SslAcceptor,
     listener: TcpListener,
-    router: HashMap<Action, Box<Handler>, BuildHasher>,
-    not_found: Box<Handler>,
+    router: HashMap<Action, Box<dyn Handler>, BuildHasher>,
+    not_found: Box<dyn Handler>,
     threads: usize,
 }
 
@@ -124,7 +124,7 @@ impl Server {
         Ok(Server {
             acceptor: Server::new_acceptor(cert, key)?,
             listener: TcpListener::bind(socket)?,
-            router: HashMap::<Action, Box<Handler>, BuildHasher>::default(),
+            router: HashMap::<Action, Box<dyn Handler>, BuildHasher>::default(),
             not_found: Box::new(NotFound {}),
             threads,
         })
@@ -209,7 +209,7 @@ impl Server {
     }
 
     /// handler returns a handler for a given Action, or file_handler if none found.
-    fn handler(&self, action: &mut Action) -> &Box<Handler> {
+    fn handler(&self, action: &mut Action) -> &Box<dyn Handler> {
         if let Some(h) = self.router.get(&action) {
             return h.clone();
         }

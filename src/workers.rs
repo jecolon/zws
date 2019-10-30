@@ -11,7 +11,7 @@ impl<F: FnOnce()> FnBox for F {
     }
 }
 
-type Job = Box<FnBox + Send + Sync + 'static>;
+type Job = Box<dyn FnBox + Send + Sync + 'static>;
 type SharedReceiver = Arc<Mutex<mpsc::Receiver<Message>>>;
 
 enum Message {

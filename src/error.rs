@@ -33,7 +33,7 @@ impl error::Error for ServerError {
         }
     }
 
-    fn cause(&self) -> Option<&error::Error> {
+    fn cause(&self) -> Option<&dyn error::Error> {
         match *self {
             ServerError::ParseAction(_) => None,
             ServerError::BadRequest => None,

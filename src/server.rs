@@ -159,33 +159,24 @@ impl Server {
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
     pub fn run(self) -> Result<()> {
         // Graceful shutdown via CTRL+C
-        let (evt_tx, evt_rx) = mpsc::channel();
-        let evt_tx = Arc::new(Mutex::new(evt_tx));
-        let evt_tx_clone_1 = Arc::clone(&evt_tx);
+        let (event_tx, event_rx) = mpsc::channel();
+        let event_tx_clone_ctrlc = mpsc::Sender::clone(&event_tx);
 
         ctrlc::set_handler(move || {
             info!("CTRL+C received! Shutting down...");
-            evt_tx_clone_1
-                .lock()
-                .unwrap()
-                .send(Event::Shutdown)
-                .unwrap();
+            event_tx_clone_ctrlc.send(Event::Shutdown).unwrap();
         })
         .unwrap();
 
         let srv = Arc::new(self);
-        let srv_clone_1 = Arc::clone(&srv);
-        let evt_tx_clone_2 = Arc::clone(&evt_tx);
+        let srv_clone_main = Arc::clone(&srv);
+        let event_tx_clone_main = mpsc::Sender::clone(&event_tx);
 
         thread::spawn(move || {
-            for stream in srv_clone_1.listener.incoming() {
+            for stream in srv_clone_main.listener.incoming() {
                 match stream {
                     Ok(stream) => {
-                        evt_tx_clone_2
-                            .lock()
-                            .unwrap()
-                            .send(Event::Incoming(stream))
-                            .unwrap();
+                        event_tx_clone_main.send(Event::Incoming(stream)).unwrap();
                     }
                     Err(e) => {
                         warn!("error in TCP accept: {}", e);
@@ -195,11 +186,11 @@ impl Server {
         });
 
         let pool = workers::Pool::new(srv.threads);
-        for event in evt_rx {
+        for event in event_rx {
             match event {
                 Event::Incoming(stream) => {
-                    let srv_clone_2 = Arc::clone(&srv);
-                    pool.execute(move || srv_clone_2.handle_stream(stream));
+                    let srv_clone_pool = Arc::clone(&srv);
+                    pool.execute(move || srv_clone_pool.handle_stream(stream));
                 }
                 Event::Shutdown => break,
             }

@@ -184,6 +184,7 @@ fn get_ctype(filename: &str) -> &str {
             ".webp" => "image/webp",
             ".txt" => "text/plain; charset=utf-8",
             ".json" => "application/json",
+            ".wasm" => "application/wasm",
             _ => "binary/octet-stream",
         }
     }

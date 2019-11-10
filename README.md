@@ -1,6 +1,14 @@
 # zws
 An multithreaded HTTP2 / TLS web server written in Rust
 
+## Setup
+By default, the server looks for certificate and key files in PEM format in a
+directory named `tls` from where you run the executable. Within that directory,
+sub-directories named `dev` and `prod` can separate local testing cert and key
+files from production ones. You also need a webroot to serve static files from.
+By default, this is a directory neamed `webroot` in the same directory from 
+which you run the executable.
+
 ## Usage
 ```sh
 Usage: zws [-h] [-c CERT] [-k KEY] [-s SOCKET] [-t THREADS] [-w DIR]

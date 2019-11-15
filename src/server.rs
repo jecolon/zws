@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crossbeam::{channel, Sender};
 use env_logger::Env;
 use openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 use seahash::SeaHasher;
@@ -159,8 +160,8 @@ impl Server {
     // run does setup and takes an incoming TLS connection and sends its stream to be handled.
     pub fn run(self) -> Result<()> {
         // Graceful shutdown via CTRL+C
-        let (event_tx, event_rx) = mpsc::channel();
-        let event_tx_clone_ctrlc = mpsc::Sender::clone(&event_tx);
+        let (event_tx, event_rx) = channel::unbounded();
+        let event_tx_clone_ctrlc = Sender::clone(&event_tx);
 
         ctrlc::set_handler(move || {
             info!("CTRL+C received! Shutting down...");
@@ -170,7 +171,7 @@ impl Server {
 
         let srv = Arc::new(self);
         let srv_clone_main = Arc::clone(&srv);
-        let event_tx_clone_main = mpsc::Sender::clone(&event_tx);
+        let event_tx_clone_main = Sender::clone(&event_tx);
 
         thread::spawn(move || {
             for stream in srv_clone_main.listener.incoming() {

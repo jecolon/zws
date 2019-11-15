@@ -182,6 +182,7 @@ fn get_ctype(filename: &str) -> &str {
             ".gif" => "image/gif",
             ".svg" => "image/svg+xml",
             ".webp" => "image/webp",
+            ".ico" => "image/ico",
             ".txt" => "text/plain; charset=utf-8",
             ".json" => "application/json",
             ".wasm" => "application/wasm",

@@ -1,7 +1,6 @@
 #[macro_use]
 extern crate criterion;
 
-use criterion::black_box;
 use criterion::Criterion;
 
 fn dummy_bench(c: &mut Criterion) {

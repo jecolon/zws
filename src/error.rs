@@ -24,15 +24,6 @@ impl fmt::Display for ServerError {
 }
 
 impl error::Error for ServerError {
-    fn description(&self) -> &str {
-        match self {
-            ServerError::ParseAction(_) => "Error parsing request action",
-            ServerError::BadRequest => "Bad request",
-            ServerError::Io(ref err) => err.description(),
-            ServerError::Ssl(ref err) => err.description(),
-        }
-    }
-
     fn cause(&self) -> Option<&dyn error::Error> {
         match *self {
             ServerError::ParseAction(_) => None,
